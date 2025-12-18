@@ -164,7 +164,7 @@ async getNGXPage(page: number): Promise<Company[]> {
         if (!this.embeddings) {
           try {
             this.embeddings = createEmbeddings();
-          } catch (err) {
+          } catch (err: any) {
             console.warn('Embeddings provider not available; continuing with zero-vector fallback:', err?.message ?? err);
             this.embeddings = null;
           }
@@ -177,7 +177,7 @@ async getNGXPage(page: number): Promise<Company[]> {
             const texts = companies.map((c) => `${c.stock_symbol} ${c.company_name} ${c.close ?? ''}`);
             // Prefer batch embedding for efficiency
             embeddingsArray = await this.embeddings.embedDocuments(texts);
-          } catch (err) {
+          } catch (err: any) {
             console.warn('Batch embeddings failed; using zero-vectors:', err?.message ?? err);
             const vecSize = parseInt(process.env.EMBEDDING_VECTOR_SIZE || '1536', 10);
             const zero = new Array(vecSize).fill(0);
@@ -194,9 +194,16 @@ async getNGXPage(page: number): Promise<Company[]> {
           const company = companies[i];
           const embeddingVec = embeddingsArray[i];
           const chunkId = randomUUID();
+          const payload = {
+            ...company,
+            // Ensure key metadata are at the top level
+            symbol: company.stock_symbol,
+            date: company.date,
+            exchange: company.exchange,
+          };
           try {
-            await this.qdrantService!.addChunk(chunkId, embeddingVec, [company]);
-          } catch (err) {
+            await this.qdrantService!.addChunk(chunkId, embeddingVec, payload);
+          } catch (err: any) {
             console.error('Failed to add company chunk to Qdrant:', company.stock_symbol, err?.message ?? err);
           }
         }

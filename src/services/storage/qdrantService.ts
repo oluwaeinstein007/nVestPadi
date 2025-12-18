@@ -130,7 +130,7 @@ export class QdrantService {
   }
 
   // Method to add a document chunk with its embedding to Qdrant
-  async addChunk(id: string, embedding: number[], companies: any[]): Promise<void> {
+  async addChunk(id: string, embedding: number[], payload: any): Promise<void> {
     try {
       await this.client.upsert(this.collectionName, {
         wait: true,
@@ -138,22 +138,7 @@ export class QdrantService {
           {
             id: id,
             vector: embedding,
-            payload: {
-              companies: companies,
-              // stock_symbol: stockSymbol,
-              // date: date,
-              // open: open,
-              // high: high,
-              // low: low,
-              // close: close,
-              // volume: volume,
-              // technical_indicators: technicalIndicators,
-              // sentiment_score: sentimentScore,
-              // news_summary: newsSummary,
-              // company_name: companyName,
-              // exchange: exchange,
-              // price_change_percent: priceChangePercent,
-            },
+            payload: payload,
           },
         ],
       });

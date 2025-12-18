@@ -60,45 +60,47 @@ class GeminiWrapper implements Embeddings {
       throw new Error('GOOGLE_API_KEY is required for Gemini embeddings.');
     }
 
-    // Correct URL structure for the Generative Language API's batchEmbedContents endpoint
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:batchEmbedContents?key=${this.apiKey}`;
-    
-    try {
-      const resp = await axios.post(
-        url,
-        {
-          // The Gemini API batchEmbedContents expects a list of requests, 
-          // where each request has the model name and the content to embed.
-          requests: texts.map(text => ({
-            model: `models/${this.model}`, // The model must be prefixed with 'models/'
-            content: { parts: [{ text }] }
-          }))
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          }
+    // Gemini batchEmbedContents has a limit of 100 requests per call
+    const CHUNK_SIZE = 100;
+    const allEmbeddings: number[][] = [];
+
+    for (let i = 0; i < texts.length; i += CHUNK_SIZE) {
+      const chunk = texts.slice(i, i + CHUNK_SIZE);
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:batchEmbedContents?key=${this.apiKey}`;
+
+      try {
+        const resp = await axios.post(
+          url,
+          {
+            requests: chunk.map((text) => ({
+              model: `models/${this.model}`,
+              content: { parts: [{ text }] },
+            })),
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          },
+        );
+
+        if (Array.isArray(resp.data?.embeddings)) {
+          allEmbeddings.push(...resp.data.embeddings.map((item: any) => item.values));
+        } else {
+          throw new Error('Could not parse Gemini embeddings response: ' + JSON.stringify(resp.data));
         }
-      );
-      return resp.data;
-    } catch (error: any) {
-      const errorMsg = error.response?.data?.error?.message || error.message;
-      // Log more specific details if available
-      console.error('Gemini API Error:', error.response?.data || error.message);
-      throw new Error(`Gemini embeddings failed: ${errorMsg}`);
+      } catch (error: any) {
+        const errorMsg = error.response?.data?.error?.message || error.message;
+        console.error('Gemini API Error:', error.response?.data || error.message);
+        throw new Error(`Gemini embeddings failed: ${errorMsg}`);
+      }
     }
+
+    return allEmbeddings;
   }
 
   async embedDocuments(texts: string[]) {
-    const result = await this.requestEmbeddings(texts);
-    
-    // Check for the expected array of embeddings in the response
-    if (Array.isArray(result?.embeddings)) {
-      // The Gemini API response provides 'values' inside each embedding object
-      return result.embeddings.map((item: any) => item.values);
-    }
-
-    throw new Error('Could not parse Gemini embeddings response: ' + JSON.stringify(result));
+    return await this.requestEmbeddings(texts);
   }
 
   async embedQuery(text: string) {
