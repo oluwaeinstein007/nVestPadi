@@ -1,5 +1,9 @@
 import axios from 'axios';
-import { OpenAIEmbeddings } from '@langchain/openai';
+
+// Note: '@langchain/openai' is an optional dependency in many environments. To avoid throwing
+// a module-not-found error at import time, we `require` it dynamically inside the OpenAIWrapper
+// constructor. This lets code that doesn't need OpenAI embeddings avoid installing the package.
+
 
 export type LLMProvider = 'openai' | 'gemini';
 
@@ -16,6 +20,17 @@ export type Embeddings = {
 class OpenAIWrapper implements Embeddings {
   private client: any;
   constructor(apiKey: string) {
+    // Dynamically require the optional package so modules that don't have
+    // this dependency installed don't fail to import this file.
+    let OpenAIEmbeddings: any;
+    try {
+      // Use require to avoid top-level ES module import errors when package is not present
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      OpenAIEmbeddings = require('@langchain/openai').OpenAIEmbeddings;
+    } catch (err) {
+      throw new Error('OpenAI embeddings package (@langchain/openai) is not installed. Set LLM_PROVIDER=gemini or install @langchain/openai.');
+    }
+
     this.client = new OpenAIEmbeddings({ apiKey });
   }
 

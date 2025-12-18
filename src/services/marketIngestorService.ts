@@ -2,6 +2,8 @@ import axios, { AxiosInstance } from 'axios';
 import * as cheerio from 'cheerio';
 import { randomUUID } from 'crypto';
 import puppeteer from 'puppeteer';
+import createEmbeddings from '../lib/llm.js';
+import { QdrantService } from './storage/qdrantService.js';
 
 
 interface Company {
@@ -27,8 +29,9 @@ interface Company {
 
 export class MarketIngestorService {
     // QdrantService is lazily instantiated when needed to avoid pulling in heavy deps
-    private qdrantService: any;
+    private qdrantService: QdrantService | null;
     private client: AxiosInstance;
+    private embeddings: any | null = null;
     private isInitialized: boolean = false;
 
     constructor() {
@@ -49,6 +52,12 @@ export class MarketIngestorService {
     if (this.isInitialized) {
       return; // Already initialized
     }
+
+    // Lazily create QdrantService to avoid pulling in heavy deps unnecessarily
+    if (!this.qdrantService) {
+      this.qdrantService = new QdrantService();
+    }
+
     await this.qdrantService.initialize(); // Initialize Qdrant
     this.isInitialized = true;
     console.log('IngestorService initialized.');
@@ -148,12 +157,51 @@ async getNGXPage(page: number): Promise<Company[]> {
         }
         
         console.log(`Found ${companies.length} companies`);
-        // Generate UUID for the chunk
-          const chunkId = randomUUID();
-          await this.initialize(); 
-          await this.qdrantService.addChunk(chunkId, embedding, companies);
-        return companies;
 
+        // Initialize Qdrant and embeddings lazily
+        await this.initialize();
+
+        if (!this.embeddings) {
+          try {
+            this.embeddings = createEmbeddings();
+          } catch (err) {
+            console.warn('Embeddings provider not available; continuing with zero-vector fallback:', err?.message ?? err);
+            this.embeddings = null;
+          }
+        }
+
+        // Compute per-company embeddings (preferred) or fall back to zero vectors
+        let embeddingsArray: number[][];
+        if (this.embeddings) {
+          try {
+            const texts = companies.map((c) => `${c.stock_symbol} ${c.company_name} ${c.close ?? ''}`);
+            // Prefer batch embedding for efficiency
+            embeddingsArray = await this.embeddings.embedDocuments(texts);
+          } catch (err) {
+            console.warn('Batch embeddings failed; using zero-vectors:', err?.message ?? err);
+            const vecSize = parseInt(process.env.EMBEDDING_VECTOR_SIZE || '1536', 10);
+            const zero = new Array(vecSize).fill(0);
+            embeddingsArray = companies.map(() => Array.from(zero));
+          }
+        } else {
+          const vecSize = parseInt(process.env.EMBEDDING_VECTOR_SIZE || '1536', 10);
+          const zero = new Array(vecSize).fill(0);
+          embeddingsArray = companies.map(() => Array.from(zero));
+        }
+
+        // Add each company as its own chunk to Qdrant for finer granularity
+        for (let i = 0; i < companies.length; i++) {
+          const company = companies[i];
+          const embeddingVec = embeddingsArray[i];
+          const chunkId = randomUUID();
+          try {
+            await this.qdrantService!.addChunk(chunkId, embeddingVec, [company]);
+          } catch (err) {
+            console.error('Failed to add company chunk to Qdrant:', company.stock_symbol, err?.message ?? err);
+          }
+        }
+
+        return companies;
     } catch (error) {
         console.error(`Error scraping page ${page}:`, error);
         if (error instanceof Error && 'response' in error) {
