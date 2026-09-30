@@ -1,216 +1,242 @@
-import { WebCrawler, CrawledPage } from './ingestion/webCrawler.js';
-import { DocumentParser } from './ingestion/documentParser.js';
-import { DatabaseService } from './storage/database.js';
+import { createHash } from 'crypto';
 import path from 'path';
-import { TextSplitter } from './chunking/textSplitter.js'; // Import TextSplitter
-import createEmbeddings from '../lib/llm.js';
-import { QdrantService } from './storage/qdrantService.js'; // Import QdrantService
-import { randomUUID } from 'crypto';
+import { WebCrawler } from './ingestion/webCrawler.js';
+import { DocumentParser } from './ingestion/documentParser.js';
+import { TextSplitter } from './chunking/textSplitter.js';
+import createEmbeddings, { type Embeddings } from '../lib/llm.js';
+import { QdrantService, type QdrantPoint } from './storage/qdrantService.js';
+import { DatabaseService } from './storage/database.js';
+
+/** Generate a deterministic UUID-shaped ID from a string key. */
+function deterministicId(key: string): string {
+  const h = createHash('sha256').update(key).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+const EMBED_BATCH_SIZE = 100;
 
 export class IngestorService {
-  private webCrawler: WebCrawler | null = null;
   private documentParser: DocumentParser;
   private databaseService: DatabaseService;
-  private textSplitter: TextSplitter; // Add TextSplitter instance
-  private embeddings: any; // Add embeddings instance (LLM-agnostic wrapper)
-  private qdrantService: QdrantService; // Add QdrantService instance
-  private isInitialized: boolean = false; // Track initialization status
-  private defaultMaxDepth = 2;
-  private defaultRateLimitMs = 500;
+  private textSplitter: TextSplitter;
+  private embeddings: Embeddings | null = null;
+  private qdrantService: QdrantService;
+  private isInitialized = false;
+
+  private readonly defaultMaxDepth = 2;
+  private readonly defaultRateLimitMs = 500;
 
   constructor() {
-    // Initialize services with default configurations
-    // Do not create WebCrawler here because it requires a valid baseUrl.
-    // We'll instantiate it per-ingest when a real URL is provided.
     this.documentParser = new DocumentParser();
     this.databaseService = new DatabaseService();
-    this.textSplitter = new TextSplitter(); // Initialize TextSplitter
-    this.embeddings = createEmbeddings(); // Create provider-specific embeddings implementation
-    this.qdrantService = new QdrantService(); // Initialize QdrantService
+    this.textSplitter = new TextSplitter({ chunkSize: 1000, chunkOverlap: 200 });
+    this.qdrantService = new QdrantService();
   }
 
-  // Initialize the service, including the database and Qdrant collection
   async initialize(): Promise<void> {
-    if (this.isInitialized) {
-      return; // Already initialized
-    }
+    if (this.isInitialized) return;
     await this.databaseService.initialize();
-    await this.qdrantService.initialize(); // Initialize Qdrant
+    await this.qdrantService.initialize();
+
+    try {
+      this.embeddings = createEmbeddings();
+    } catch (err: any) {
+      console.warn('Embeddings provider unavailable; zero-vector fallback active. Error:', err?.message ?? err);
+      this.embeddings = null;
+    }
+
     this.isInitialized = true;
     console.log('IngestorService initialized.');
   }
 
+  // ---------------------------------------------------------------------------
+  // URL ingestion
+  // ---------------------------------------------------------------------------
+
   async ingestUrl(url: string): Promise<string[]> {
-    await this.initialize(); // Ensure initialization
+    await this.initialize();
 
-    // Normalize and validate the provided URL. Trim whitespace and ensure it has a protocol.
-    let normalizedUrl = (url || '').toString().trim();
+    const normalizedUrl = this.normalizeUrl(url);
 
-    // Strip surrounding quotes and common invisible chars (BOM, zero-width spaces)
-    normalizedUrl = normalizedUrl.replace(/^[\"'\uFEFF\u200B\u200C\u200D]+|[\"'\uFEFF\u200B\u200C\u200D]+$/g, '');
-
-    // Collapse internal whitespace and encode spaces
-    if (/\s/.test(normalizedUrl)) {
-      normalizedUrl = normalizedUrl.replace(/\s+/g, ' ');
-      normalizedUrl = normalizedUrl.replace(/ /g, '%20');
-    }
-
-    const isValidUrl = (s: string) => {
-      try {
-        // This will throw for invalid URLs
-        // allow protocol-relative by rejecting them here
-        const parsed = new URL(s);
-        return Boolean(parsed.protocol && (parsed.protocol === 'http:' || parsed.protocol === 'https:'));
-      } catch (e) {
-        return false;
-      }
-    };
-
-    if (!isValidUrl(normalizedUrl)) {
-      // If missing protocol, try prefixing https://
-      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(normalizedUrl)) {
-        const tried = `https://${normalizedUrl}`;
-        if (isValidUrl(tried)) {
-          normalizedUrl = tried;
-        } else {
-          throw new Error(`The ` + "`url`" + ` param expected to contain a valid URL starting with a protocol (http:// or https://). Received: ${url}`);
-        }
-      } else {
-        throw new Error(`The ` + "`url`" + ` param expected to contain a valid URL starting with a protocol (http:// or https://). Received: ${url}`);
-      }
-    }
-
-    // (Re)create the web crawler with the validated start URL.
-    // WebCrawler expects a valid baseUrl, so instantiate it here instead of in the constructor.
-    this.webCrawler = new WebCrawler({
+    const crawler = new WebCrawler({
       maxDepth: this.defaultMaxDepth,
       baseUrl: normalizedUrl,
       rateLimitMs: this.defaultRateLimitMs,
-      respectRobotsTxt: false,
     });
 
     console.log(`Starting web crawl from: ${normalizedUrl}`);
-    const crawledPages = await this.webCrawler.start(normalizedUrl);
-    const ingestedIds: string[] = [];
+    const crawledPages = await crawler.start(normalizedUrl);
+
+    // Collect all (chunkId, text, metadata) tuples first so we can batch-embed
+    type ChunkJob = { chunkId: string; text: string; payload: Record<string, unknown> };
+    const jobs: ChunkJob[] = [];
 
     for (const [pageUrl, pageData] of crawledPages.entries()) {
-      const documentContent = pageData.content;
+      if (!pageData.content) continue;
+      const chunks = await this.textSplitter.splitText(pageData.content);
 
-      if (documentContent) {
-        // Split content into chunks
-        const chunks = await this.textSplitter.splitText(documentContent);
-
-        for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i];
-          const chunkMetadata = {
-            ...pageData.metadata, // Inherit metadata from pageData
-            source: pageData.title || pageUrl, // Use title as source for the chunk
-            type: 'webpage_chunk', // Indicate it's a chunk
-            originalUrl: pageUrl,
-            links: pageData.links,
-            chunkIndex: i, // Add chunk index
-            totalChunks: chunks.length, // Add total chunk count
-          };
-
-          // Generate embedding for the chunk
-          let embedding: number[];
-          try {
-            embedding = await this.embeddings.embedQuery(chunk);
-          } catch (err: any) {
-            console.warn('Embedding call failed; falling back to zero-vector. Error:', err?.message ?? err);
-            const vecSize = parseInt(process.env.EMBEDDING_VECTOR_SIZE || '1536', 10);
-            embedding = new Array(vecSize).fill(0);
-          }
-
-          // Generate UUID for the chunk
-          const chunkId = randomUUID();
-
-          // Save chunk to database with chunkId
-          const dbId = await this.databaseService.saveDocument(
-            chunkMetadata.source,
-            chunkMetadata.type,
-            chunk, // Save the chunk content
-            chunkMetadata,
-            chunkId // Pass the UUID
-          );
-
-          if (dbId) {
-            // Save embedding to Qdrant using the same chunkId
-            await this.qdrantService.addChunk(chunkId, chunk, embedding);
-            ingestedIds.push(chunkId);
-          }
-        }
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkId = deterministicId(`url:${pageUrl}:chunk:${i}`);
+        const payload: Record<string, unknown> = {
+          ...pageData.metadata,
+          source: pageData.title || pageUrl,
+          type: 'webpage_chunk',
+          originalUrl: pageUrl,
+          links: pageData.links,
+          chunkIndex: i,
+          totalChunks: chunks.length,
+        };
+        jobs.push({ chunkId, text: chunks[i], payload });
       }
     }
+
+    const ingestedIds = await this.processChunkJobs(jobs, 'url');
     console.log(`Finished crawling and ingesting ${ingestedIds.length} chunks.`);
     return ingestedIds;
   }
 
+  // ---------------------------------------------------------------------------
+  // File ingestion
+  // ---------------------------------------------------------------------------
+
   async ingestFile(filePath: string): Promise<string | null> {
-    await this.initialize(); // Ensure initialization
+    await this.initialize();
 
-    const absoluteFilePath = path.resolve(filePath); // Ensure we have an absolute path
+    const absoluteFilePath = path.resolve(filePath);
     const parsedDoc = await this.documentParser.parse(absoluteFilePath);
+    if (!parsedDoc?.content) return null;
 
-    if (parsedDoc) {
-      const documentContent = parsedDoc.content;
-      const originalMetadata = parsedDoc.metadata;
+    const chunks = await this.textSplitter.splitText(parsedDoc.content);
 
-      if (documentContent) {
-        // Split content into chunks
-        const chunks = await this.textSplitter.splitText(documentContent);
+    type ChunkJob = { chunkId: string; text: string; payload: Record<string, unknown> };
+    const jobs: ChunkJob[] = chunks.map((chunk, i) => ({
+      chunkId: deterministicId(`file:${absoluteFilePath}:chunk:${i}`),
+      text: chunk,
+      payload: {
+        ...parsedDoc.metadata,
+        type: `${parsedDoc.metadata.type}_chunk`,
+        chunkIndex: i,
+        totalChunks: chunks.length,
+      },
+    }));
 
-        const chunkIds: string[] = [];
-        for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i];
-          const chunkMetadata = {
-            ...originalMetadata,
-            source: originalMetadata.source, // Keep original source
-            type: `${originalMetadata.type}_chunk`, // Indicate it's a chunk
-            chunkIndex: i,
-            totalChunks: chunks.length,
-          };
+    const ids = await this.processChunkJobs(jobs, 'file');
+    return ids[0] ?? null;
+  }
 
-          // Generate embedding for the chunk
-          const embedding = await this.embeddings.embedQuery(chunk);
+  // ---------------------------------------------------------------------------
+  // Shared batch processing
+  // ---------------------------------------------------------------------------
 
-          // Generate UUID for the chunk
-          const chunkId = randomUUID();
+  private async processChunkJobs(
+    jobs: Array<{ chunkId: string; text: string; payload: Record<string, unknown> }>,
+    context: string,
+  ): Promise<string[]> {
+    if (jobs.length === 0) return [];
 
-          // Save chunk to database with chunkId
-          const dbId = await this.databaseService.saveDocument(
-            chunkMetadata.source,
-            chunkMetadata.type,
-            chunk, // Save the chunk content
-            chunkMetadata,
-            chunkId // Pass the UUID
-          );
-          if (dbId) {
-            // Save embedding to Qdrant using the same chunkId
-            await this.qdrantService.addChunk(chunkId, chunk, embedding);
-            chunkIds.push(chunkId);
-          }
-        }
-        // Return the ID of the first chunk, or null if no chunks were saved
-        return chunkIds.length > 0 ? chunkIds[0] : null;
+    // Filter out already-ingested chunks (idempotency check in SQLite)
+    const newJobs: typeof jobs = [];
+    for (const job of jobs) {
+      const exists = await this.databaseService.chunkExists(job.chunkId);
+      if (!exists) newJobs.push(job);
+    }
+
+    if (newJobs.length === 0) {
+      console.log(`[${context}] All ${jobs.length} chunks already ingested — skipping.`);
+      return [];
+    }
+
+    console.log(`[${context}] Embedding ${newJobs.length} new chunks (${jobs.length - newJobs.length} skipped as duplicates)...`);
+
+    // Batch embed all texts at once
+    const texts = newJobs.map(j => j.text);
+    const vectors = await this.batchEmbed(texts);
+
+    // Save to SQLite + collect Qdrant points
+    const points: QdrantPoint[] = [];
+    const ingestedIds: string[] = [];
+
+    for (let i = 0; i < newJobs.length; i++) {
+      const { chunkId, text, payload } = newJobs[i];
+      const dbId = await this.databaseService.saveDocument(
+        String(payload.source ?? ''),
+        String(payload.type ?? 'chunk'),
+        text,
+        payload,
+        chunkId,
+      );
+      if (dbId !== null) {
+        points.push({ id: chunkId, vector: vectors[i], payload });
+        ingestedIds.push(chunkId);
       }
     }
-    return null;
+
+    await this.qdrantService.batchUpsert(points);
+    return ingestedIds;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Embedding helper
+  // ---------------------------------------------------------------------------
+
+  private async batchEmbed(texts: string[]): Promise<number[][]> {
+    const vecSize = parseInt(process.env.EMBEDDING_VECTOR_SIZE || '1536', 10);
+    const zeroVec = () => new Array(vecSize).fill(0);
+
+    if (!this.embeddings) {
+      return texts.map(zeroVec);
+    }
+
+    const results: number[][] = [];
+    for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
+      const batch = texts.slice(i, i + EMBED_BATCH_SIZE);
+      try {
+        const vecs = await this.embeddings.embedDocuments(batch);
+        results.push(...vecs);
+      } catch (err: any) {
+        console.warn(`Batch embed failed (batch ${Math.floor(i / EMBED_BATCH_SIZE) + 1}); using zero-vectors. Error:`, err?.message ?? err);
+        results.push(...batch.map(zeroVec));
+      }
+    }
+    return results;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Misc helpers
+  // ---------------------------------------------------------------------------
+
+  private normalizeUrl(url: string): string {
+    let normalized = (url || '').toString().trim()
+      .replace(/^[\"'\uFEFF\u200B\u200C\u200D]+|[\"'\uFEFF\u200B\u200C\u200D]+$/g, '')
+      .replace(/\s+/g, '%20');
+
+    const isHttp = (s: string) => {
+      try {
+        const p = new URL(s);
+        return p.protocol === 'http:' || p.protocol === 'https:';
+      } catch { return false; }
+    };
+
+    if (!isHttp(normalized)) {
+      const withScheme = `https://${normalized}`;
+      if (isHttp(withScheme)) return withScheme;
+      throw new Error(`Invalid URL: ${url}`);
+    }
+    return normalized;
   }
 
   async getDocument(id: number): Promise<any | null> {
-    await this.initialize(); // Ensure initialization
+    await this.initialize();
     return this.databaseService.getDocumentById(id);
   }
 
   async getAllDocuments(): Promise<any[]> {
-    await this.initialize(); // Ensure initialization
+    await this.initialize();
     return this.databaseService.getAllDocuments();
   }
 
   async close(): Promise<void> {
     await this.databaseService.close();
-    this.textSplitter.free(); // Clean up the encoding
-    // await this.qdrantService.close(); // Close Qdrant connection
+    this.textSplitter.free();
   }
 }

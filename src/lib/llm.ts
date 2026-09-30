@@ -121,7 +121,7 @@ export function createEmbeddings(options: LLMOptions = {}): Embeddings {
 
   if (provider === 'gemini') {
     const apiKey = options.apiKey || process.env.GOOGLE_API_KEY || process.env.LLM_API_KEY || '';
-    const model = process.env.GEMINI_EMBEDDING_MODEL || 'text-embedding-004';
+    const model = process.env.GOOGLE_EMBEDDING_MODEL || 'gemini-embedding-001';
 
     if (!apiKey) {
       throw new Error('GOOGLE_API_KEY or LLM_API_KEY is required for Gemini embeddings. Get one at: https://aistudio.google.com/app/apikey');
