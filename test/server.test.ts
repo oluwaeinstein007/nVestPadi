@@ -38,9 +38,14 @@ describe("HTTP API", () => {
 		assert.equal((await call("/api/status")).status, 200);
 	});
 
-	it("serves the dashboard and refuses path traversal", async () => {
+	it("serves the landing page, the dashboard and images, and refuses path traversal", async () => {
 		const res = await call("/", {}, null);
 		assert.equal(res.status, 200);
+		assert.match(await res.text(), /AI research desk/);
+		const dashboard = await call("/app", {}, null);
+		assert.match(await dashboard.text(), /id="screen-form"/);
+		const image = await call("/img/dashboard-dark.webp", {}, null);
+		assert.equal(image.headers.get("content-type"), "image/webp");
 		assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'self'/);
 		assert.equal((await call("/../package.json", {}, null)).status, 404);
 	});

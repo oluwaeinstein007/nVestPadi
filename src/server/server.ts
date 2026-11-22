@@ -40,9 +40,13 @@ const MIME: Record<string, string> = {
 	".js": "text/javascript; charset=utf-8",
 	".css": "text/css; charset=utf-8",
 	".svg": "image/svg+xml",
+	".png": "image/png",
+	".webp": "image/webp",
 	".json": "application/json",
 };
 const MAX_BODY = 64 * 1024;
+/** Clean URLs for the HTML pages: landing at `/`, dashboard at `/app`. */
+const PAGE_ROUTES: Record<string, string> = { "/": "/index.html", "/app": "/app.html", "/app/": "/app.html" };
 
 const exchangeSchema = z
 	.string()
@@ -209,9 +213,11 @@ export function createRequestHandler(app: App) {
 	// -- Static dashboard --------------------------------------------------------
 	const assets = new Map<string, { type: string; data: Buffer }>();
 	try {
-		for (const file of readdirSync(PUBLIC_DIR)) {
+		// Loaded once into memory from a fixed directory, so request paths can never escape it.
+		for (const file of readdirSync(PUBLIC_DIR, { recursive: true }) as string[]) {
 			const type = MIME[path.extname(file)];
-			if (type) assets.set(`/${file}`, { type, data: readFileSync(path.join(PUBLIC_DIR, file)) });
+			const urlPath = `/${file.split(path.sep).join("/")}`;
+			if (type) assets.set(urlPath, { type, data: readFileSync(path.join(PUBLIC_DIR, file)) });
 		}
 	} catch {
 		logger.warn("dashboard assets not found; serving API only", { dir: PUBLIC_DIR });
@@ -234,13 +240,14 @@ export function createRequestHandler(app: App) {
 
 		try {
 			if (!url.pathname.startsWith("/api/")) {
-				const asset = assets.get(url.pathname === "/" ? "/index.html" : url.pathname);
+				const asset = assets.get(PAGE_ROUTES[url.pathname] ?? url.pathname);
 				if (!asset || req.method !== "GET") throw new HttpProblem(404, "Not found");
 				res.setHeader(
 					"Content-Security-Policy",
 					"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'",
 				);
-				res.writeHead(200, { "Content-Type": asset.type, "Cache-Control": "no-cache" });
+				const cache = asset.type.startsWith("image/") ? "public, max-age=86400" : "no-cache";
+				res.writeHead(200, { "Content-Type": asset.type, "Cache-Control": cache });
 				res.end(asset.data);
 				return;
 			}

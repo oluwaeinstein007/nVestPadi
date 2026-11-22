@@ -23,7 +23,7 @@ src/
 ├── storage/        database.ts (node:sqlite), vectorStore.ts (Qdrant)
 ├── ai/provider.ts  OpenAI / Gemini embeddings + chat over REST
 └── lib/            http (retry/timeout), logger, shutdown, util
-public/             dashboard (vanilla HTML/CSS/JS, no build step)
+public/             landing page (/), dashboard (/app) and screenshots — vanilla HTML/CSS/JS, no build step
 test/               node:test suites
 ```
 

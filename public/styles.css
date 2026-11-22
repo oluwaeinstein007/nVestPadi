@@ -160,6 +160,8 @@ svg {
 	gap: 8px;
 	font-size: 17px;
 	letter-spacing: -0.01em;
+	color: inherit;
+	text-decoration: none;
 }
 .brand strong {
 	color: var(--brand);

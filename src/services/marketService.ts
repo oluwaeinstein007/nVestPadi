@@ -3,6 +3,7 @@
  * (optionally) index into the knowledge base.
  */
 import { type SecurityReport, buildReport } from "../analysis/report.js";
+import { HttpError } from "../lib/http.js";
 import { logger } from "../lib/logger.js";
 import { fetchNgxHistory, fetchNgxSnapshot } from "../markets/ngx.js";
 import { EXCHANGES, type Exchange, type MarketSnapshot } from "../markets/types.js";
@@ -85,6 +86,7 @@ export class MarketService {
 	async loadHistory(symbol: string, options: { exchange?: Exchange; range?: YahooRange } = {}) {
 		const ticker = symbol.toUpperCase();
 		const candidates = options.exchange ? [options.exchange] : this.candidateExchanges(ticker);
+		let unexpected: unknown;
 		for (const exchange of candidates) {
 			try {
 				const snapshot =
@@ -103,8 +105,11 @@ export class MarketService {
 			} catch (err) {
 				logger.debug(`history lookup failed on ${exchange}`, { symbol: ticker, error: String(err) });
 				if (options.exchange) throw err;
+				if (!isNotFound(err)) unexpected = err;
 			}
 		}
+		// A rate limit or outage shouldn't masquerade as "unknown ticker".
+		if (unexpected) throw unexpected;
 		throw new SymbolNotFoundError(ticker, options.exchange);
 	}
 
@@ -166,4 +171,9 @@ export class MarketService {
 		if (!security || bars.length === 0) throw new SymbolNotFoundError(target.symbol, target.exchange);
 		return buildReport(security, bars);
 	}
+}
+
+function isNotFound(err: unknown): boolean {
+	if (err instanceof HttpError) return err.status === 404;
+	return err instanceof Error && /not found|unknown us symbol|no .*(data|history)/i.test(err.message);
 }
