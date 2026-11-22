@@ -1,0 +1,25 @@
+# Local stack: nVestPadi + Qdrant.  Usage: cp .env.example .env && docker compose up -d
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      QDRANT_URL: http://qdrant:6333
+    ports:
+      # Bound to localhost only. To expose publicly, set API_KEY in .env first.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - nvest-data:/data
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.2
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  nvest-data:
+  qdrant-data:

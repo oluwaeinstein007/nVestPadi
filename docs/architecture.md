@@ -1,198 +1,77 @@
-# Architecture & Developer Guide
+# Architecture
 
-This document covers internal design decisions, extension points, and patterns used throughout the codebase.
+## Layout
 
----
-
-## Core Design Principles
-
-### 1. Idempotent ingestion via deterministic IDs
-
-Every chunk of content maps to a deterministic UUID derived from its source identity:
-
-```
-market quote  →  SHA256("NGX:DANGCEM:2024-01-15")
-web chunk     →  SHA256("https://example.com:3")
-file chunk    →  SHA256("file:/abs/path/report.csv:7")
-```
-
-The same data always produces the same ID. Since Qdrant `upsert` overwrites on collision, and SQLite uses `ON CONFLICT(chunkId) DO UPDATE SET`, re-running ingestion is always safe.
-
-### 2. Collect-then-batch pattern
-
-All ingestion paths follow the same structure:
-
-```
-1. Collect all items (quotes, chunks, bars)
-2. Filter already-ingested items (SQLite lookup)
-3. embedDocuments(all_texts)   ← single batch API call
-4. batchUpsert(all_points)     ← single batch DB call
+```text
+src/
+├── cli/            nvest command-line interface (+ terminal formatting)
+├── server/         REST API + static dashboard (node:http)
+├── app.ts          composition root — builds every service from Config
+├── config.ts       the ONLY module that reads process.env (zod-validated)
+├── scheduler.ts    periodic sync + alert check
+├── services/
+│   ├── marketService.ts    sources → SQLite (→ knowledge base)
+│   ├── knowledgeBase.ts    embed + upsert + search; URL/file ingestion
+│   ├── insightService.ts   grounded "ask" (context assembly + LLM)
+│   └── alertService.ts     alert evaluation + Telegram/Discord delivery
+├── analysis/
+│   ├── technicalAnalysis.ts  pure indicator functions
+│   ├── report.ts             per-security report & summary
+│   └── market.ts             breadth, sectors, screener
+├── markets/        data sources (ngx.ts, yahoo.ts) + shared types
+├── ingestion/      webCrawler, documentParser (PDF/HTML/CSV/…), textSplitter
+├── storage/        database.ts (node:sqlite), vectorStore.ts (Qdrant)
+├── ai/provider.ts  OpenAI / Gemini embeddings + chat over REST
+└── lib/            http (retry/timeout), logger, shutdown, util
+public/             dashboard (vanilla HTML/CSS/JS, no build step)
+test/               node:test suites
 ```
 
-This minimises API round-trips and avoids the N+1 problem of per-item embedding calls.
+The CLI and the server both call `createApp(config)`, so they share the same behaviour. Services receive their dependencies through their constructors, which makes them easy to test with an in-memory DB and stub AI/vector stores (see `test/ai.test.ts`).
 
-### 3. Graceful degradation
+## Data flow
 
-| Component | Fallback behaviour |
-|---|---|
-| Qdrant unavailable | `QDRANT_ENABLED=false` skips all vector ops |
-| Embedding API fails | Zero-vector returned; ingestion continues |
-| `better-sqlite3` missing | In-memory `Map` replaces SQLite |
-
----
-
-## Module Dependency Map
-
-```
-scripts/run_ingest.ts
-├── src/services/marketIngestorService.ts
-│   ├── src/lib/llm.ts
-│   ├── src/lib/http.ts
-│   ├── src/services/storage/qdrantService.ts
-│   └── src/services/TechnicalAnalysis.ts
-└── src/services/ingestorService.ts
-    ├── src/lib/llm.ts
-    ├── src/services/chunking/textSplitter.ts
-    ├── src/services/ingestion/webCrawler.ts
-    ├── src/services/ingestion/documentParser.ts
-    ├── src/services/storage/qdrantService.ts
-    └── src/services/storage/database.ts
+```text
+                ┌── NGX API ──┐   ┌── Yahoo ──┐
+                ▼             ▼   ▼           │
+  nvest sync → MarketService.sync ──► SQLite (securities, daily_prices)
+                      │                    │
+                      │ (AI + Qdrant set)  ├─► analysis/* (reports, screener, breadth)
+                      ▼                    └─► AlertService.check ─► Telegram / Discord
+               KnowledgeBase.indexQuotes
+                      │
+  nvest ingest ───────┴─► embed (changed chunks only) ─► Qdrant
+                                                          │
+  nvest ask ─► InsightService: symbol reports + breadth + vector hits ─► LLM ─► answer [n]
 ```
 
----
+## Key decisions
 
-## Adding a New Data Source
+**SQLite is the source of truth for market data.** Prices are structured data, so screening, technical analysis and alerts run on SQL rather than on a vector store. Qdrant holds only text meant for retrieval: research documents and one quote snapshot per symbol per day. Raw OHLCV bars aren't embedded, since that would add cost without useful semantic recall.
 
-To add a new market or document source:
+**Idempotency.** Every vector point has a deterministic UUID, the SHA-256 of `web:<url>:<i>`, `file:<path>:<i>` or `quote:<EX>:<SYM>:<date>`. The `indexed_chunks` table stores a content hash per ID, so re-running ingestion skips unchanged chunks and re-embeds changed ones. Price upserts use `ON CONFLICT … COALESCE`, so a sparser source never wipes fields from a richer one.
 
-1. **Create a fetcher** in `src/services/ingestion/` or extend `marketIngestorService.ts`.
-2. **Normalise to text**: Each item becomes a plain-text string representation.
-3. **Generate deterministic IDs**: Use `crypto.createHash('sha256').update(uniqueKey).digest('hex')` then convert to UUID v5 format (or use the existing pattern in `marketIngestorService.ts`).
-4. **Call the batch helpers**:
-   - `llm.embedDocuments(texts)` for embeddings
-   - `qdrantService.batchUpsert(points)` for vector storage
-   - `db.saveDocument(doc)` for metadata (if applicable)
-5. **Add a CLI command** in `scripts/run_ingest.ts`.
+**No fake vectors.** AI failures throw. The v1 zero-vector fallback silently polluted the index, and it's gone.
 
----
+**Self-sizing collection.** The Qdrant collection is created on first write with the dimension of the first embedding. A later mismatch, such as switching models, fails with an actionable message.
 
-## Qdrant Collection Schema
+**Graceful capability tiers.** Market features need nothing. `ask` needs an AI provider. `search` and `ingest` need AI plus Qdrant. A missing capability raises `FeatureUnavailableError`, which the CLI shows as a hint and the API returns as a 503.
 
-```
-Collection: nvestpadi (default)
-Vector: cosine distance, size = EMBEDDING_VECTOR_SIZE (default 1536)
+**Schema migrations.** `database.ts` holds an ordered `MIGRATIONS` array, applied in transactions and tracked with `PRAGMA user_version`. To change the schema, append a new entry and never edit an old one.
 
-Payload indexes (keyword type):
-  - exchange       (e.g. "NGX", "US")
-  - stock_symbol   (e.g. "AAPL", "DANGCEM")
-  - date           (e.g. "2024-01-15")
-```
+## Grounded answers
 
-Payload for market quotes includes:
-```json
-{
-  "type": "market_quote",
-  "exchange": "NGX",
-  "stock_symbol": "DANGCEM",
-  "date": "2024-01-15",
-  "company_name": "Dangote Cement PLC",
-  "sector": "Industrial Goods",
-  "open": 320.0,
-  "high": 325.0,
-  "low": 318.0,
-  "close": 322.5,
-  "volume": 1234567,
-  "content": "..."
-}
-```
+`InsightService.ask` builds a numbered context:
 
-Payload for document chunks includes:
-```json
-{
-  "type": "web_chunk",
-  "source": "https://example.com/page",
-  "chunkIndex": 3,
-  "title": "Page Title",
-  "content": "...",
-  "ingested_at": "2024-01-15T10:00:00Z"
-}
-```
+1. **Symbol reports.** Tickers are detected in the question: all-caps tokens, or words of 5+ characters matching a ticker, plus company-name matches. Each detected symbol gets a `reportToText` summary. History is fetched on demand if it's missing.
+2. **Market overview.** Added when the question mentions the market, movers or sectors, or when no symbol was found.
+3. **Vector hits.** The top 8 semantic matches above a 0.3 cosine score.
 
----
+The system prompt restricts the model to that context and requires inline `[n]` citations. The response returns the source list so UIs can render it.
 
-## Embedding Providers
+## Extending
 
-### OpenAI
-
-Uses `@langchain/openai`. Set:
-```
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-EMBEDDING_VECTOR_SIZE=1536
-```
-
-Default model: `text-embedding-ada-002`. To use `text-embedding-3-large` (3072 dims), configure inside `src/lib/llm.ts` and update `EMBEDDING_VECTOR_SIZE`.
-
-### Gemini
-
-Direct REST API calls to `https://generativelanguage.googleapis.com`. Set:
-```
-LLM_PROVIDER=gemini
-GOOGLE_API_KEY=AIza...
-EMBEDDING_VECTOR_SIZE=768
-```
-
-Model: `text-embedding-004`.
-
----
-
-## SQLite Schema
-
-```sql
-CREATE TABLE IF NOT EXISTS documents (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  chunkId     TEXT UNIQUE NOT NULL,
-  source      TEXT NOT NULL,
-  type        TEXT NOT NULL,
-  content     TEXT,
-  metadata    TEXT,
-  ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_source ON documents(source);
-CREATE INDEX IF NOT EXISTS idx_type   ON documents(type);
-```
-
-WAL mode is enabled (`PRAGMA journal_mode=WAL`) for concurrent read access. Foreign keys are enabled but not currently used.
-
----
-
-## Text Splitting Strategy
-
-`TextSplitter` uses a recursive descent through separator priority:
-
-```
-1. Try splitting on '\n\n'  (paragraph breaks)
-2. Try splitting on '\n'    (line breaks)
-3. Try splitting on '. '    (sentence breaks)
-4. Try splitting on ' '     (word breaks)
-5. Hard split at chunkSize  (last resort)
-```
-
-After splitting, an overlap of `chunkOverlap` characters from the end of chunk N is prepended to chunk N+1. This preserves context continuity across chunk boundaries.
-
----
-
-## Web Crawler Behaviour
-
-- Same-origin enforcement: only follows links whose `hostname` matches the start URL
-- Removes: `script`, `style`, `nav`, `footer`, `header`, `aside`, `noscript`
-- Rate limiting: 500 ms sleep between page requests (configurable)
-- Does not implement `robots.txt` parsing (disabled by default flag)
-- Returns a `Map<url, CrawledPage>` — each page has `content`, `title`, `links`, and `metadata`
-
----
-
-## CLI `.env` Loading
-
-`scripts/run_ingest.ts` loads `.env` from the project root without requiring `dotenv` as a runtime dependency. It reads the file, splits on `\n`, strips comments and empty lines, and calls `process.env[key] = value` for each entry. This means `.env` must be present at the project root when running CLI commands.
+- **New exchange.** Add a fetcher in `src/markets/` that returns `MarketSnapshot`, add the code to `EXCHANGES`/`CURRENCY` in `types.ts`, then branch on it in `MarketService.sync` and `loadHistory`.
+- **New alert condition.** Add it to `ALERT_CONDITIONS` and a `case` in `AlertService.evaluate`. The CLI, API validation and dashboard pick it up automatically.
+- **New document format.** Add a `case` in `parseDocument` and list the extension in `SUPPORTED_EXTENSIONS`.
+- **New AI provider.** Implement `AIProvider` in `src/ai/provider.ts`, then extend `AIProviderName` and `DEFAULT_MODELS` in `config.ts`.
