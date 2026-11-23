@@ -1,15 +1,18 @@
 /**
  * Price / momentum / volume alerts, checked after every sync and delivered to
- * Telegram and/or Discord. Alerts are one-shot: once triggered they stay in the
- * list (with the trigger value) but are no longer evaluated.
+ * each owner's channels. Alerts are one-shot: once triggered they stay in the
+ * list (with the trigger value) until deleted or re-armed.
  */
 import { rsi, sma } from "../analysis/technicalAnalysis.js";
-import type { Config } from "../config.js";
-import { postJson } from "../lib/http.js";
-import { logger } from "../lib/logger.js";
+import type { AppMode } from "../config.js";
+import { NotFoundError, PlanLimitError, ValidationError } from "../lib/errors.js";
 import { round } from "../lib/util.js";
 import type { Exchange } from "../markets/types.js";
-import type { AlertRow, Database } from "../storage/database.js";
+import type { Database } from "../storage/database.js";
+import type { AlertRow } from "../storage/repositories/alerts.js";
+import type { User } from "../storage/repositories/users.js";
+import type { DeliveryResult, Notifier } from "./notifier.js";
+import { limitsFor } from "./plans.js";
 
 export const ALERT_CONDITIONS = {
 	above: "price rises to or above",
@@ -32,84 +35,93 @@ export interface TriggeredAlert {
 	message: string;
 }
 
-export class Notifier {
-	constructor(private readonly config: Config["notifications"]) {}
-
-	get channels(): string[] {
-		return [this.config.telegram && "telegram", this.config.discordWebhookUrl && "discord"].filter(Boolean) as string[];
-	}
-
-	async send(text: string): Promise<void> {
-		const { telegram, discordWebhookUrl } = this.config;
-		const jobs: Promise<unknown>[] = [];
-		if (telegram) {
-			jobs.push(
-				postJson(`https://api.telegram.org/bot${telegram.botToken}/sendMessage`, {
-					chat_id: telegram.chatId,
-					text,
-					disable_web_page_preview: true,
-				}),
-			);
-		}
-		if (discordWebhookUrl) jobs.push(postJson(discordWebhookUrl, { content: text.slice(0, 2000) }));
-		const results = await Promise.allSettled(jobs);
-		for (const r of results) {
-			if (r.status === "rejected") logger.warn("notification failed", { error: String(r.reason) });
-		}
-	}
-}
-
 export class AlertService {
 	constructor(
 		private readonly db: Database,
 		private readonly notifier: Notifier,
+		private readonly mode: AppMode,
 	) {}
 
-	add(input: {
-		exchange: Exchange;
-		symbol: string;
-		condition: AlertCondition;
-		threshold: number;
-		note?: string;
-	}): AlertRow {
-		if (!Number.isFinite(input.threshold)) throw new Error("Alert threshold must be a number");
+	add(
+		user: User,
+		input: { exchange: Exchange; symbol: string; condition: AlertCondition; threshold: number; note?: string },
+	): AlertRow {
+		if (!Number.isFinite(input.threshold)) throw new ValidationError("Alert threshold must be a number");
 		if (input.condition === "volume-spike" && input.threshold <= 1)
-			throw new Error("volume-spike multiplier must be > 1 (e.g. 3)");
-		return this.db.createAlert(input);
+			throw new ValidationError("volume-spike multiplier must be > 1 (e.g. 3)");
+		this.assertCapacity(user);
+		return this.db.alerts.create({ ...input, userId: user.id });
 	}
 
-	list(activeOnly = false) {
-		return this.db.listAlerts({ activeOnly });
+	list(user: User, activeOnly = false): AlertRow[] {
+		return this.db.alerts.listForUser(user.id, { activeOnly });
 	}
 
-	remove(id: number): boolean {
-		return this.db.deleteAlert(id);
+	remove(user: User, id: number): boolean {
+		return this.db.alerts.delete(user.id, id);
 	}
 
-	/** Evaluate all active alerts against the latest stored data; notify and mark the ones that fire. */
-	async check(): Promise<TriggeredAlert[]> {
+	rearm(user: User, id: number): AlertRow {
+		this.assertCapacity(user);
+		const alert = this.db.alerts.rearm(user.id, id);
+		if (!alert) throw new NotFoundError("Alert not found");
+		return alert;
+	}
+
+	private assertCapacity(user: User) {
+		const { activeAlerts } = limitsFor(user, this.mode);
+		if (this.db.alerts.countActive(user.id) >= activeAlerts) {
+			throw new PlanLimitError(
+				`Your plan allows ${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"}. Delete one or upgrade to Pro.`,
+			);
+		}
+	}
+
+	/**
+	 * Evaluate every armed alert against the latest stored data, mark the ones
+	 * that fire, and send each owner one digest.
+	 */
+	async check(): Promise<(TriggeredAlert & { delivery?: DeliveryResult[] })[]> {
 		const triggered: TriggeredAlert[] = [];
-		for (const alert of this.db.listAlerts({ activeOnly: true })) {
+		for (const alert of this.db.alerts.listActive()) {
 			const value = this.evaluate(alert);
 			if (value === null) continue;
-			this.db.markAlertTriggered(alert.id, value);
-			const quote = this.db.latestQuote(alert.exchange, alert.symbol);
-			const message = `🔔 ${alert.exchange}:${alert.symbol} — ${ALERT_CONDITIONS[alert.condition as AlertCondition]} ${alert.threshold} (now ${value}${quote ? `, close ${quote.currency} ${quote.close} on ${quote.date}` : ""})${alert.note ? `\n${alert.note}` : ""}`;
+			this.db.alerts.markTriggered(alert.id, value);
 			triggered.push({
 				alert: { ...alert, triggeredAt: new Date().toISOString(), triggerValue: value },
 				value,
-				message,
+				message: this.describe(alert, value),
 			});
 		}
-		if (triggered.length > 0 && this.notifier.channels.length > 0) {
-			await this.notifier.send(triggered.map((t) => t.message).join("\n\n"));
+
+		const byUser = new Map<number, TriggeredAlert[]>();
+		for (const t of triggered) {
+			const userId = t.alert.userId as number;
+			byUser.set(userId, [...(byUser.get(userId) ?? []), t]);
 		}
-		return triggered;
+		const results: (TriggeredAlert & { delivery?: DeliveryResult[] })[] = [];
+		for (const [userId, list] of byUser) {
+			const user = this.db.users.byId(userId);
+			const delivery = user
+				? await this.notifier.deliver(
+						user,
+						list.map((t) => t.message),
+					)
+				: [];
+			for (const t of list) results.push({ ...t, delivery });
+		}
+		return results;
+	}
+
+	private describe(alert: AlertRow, value: number): string {
+		const quote = this.db.market.latestQuote(alert.exchange, alert.symbol);
+		const label = ALERT_CONDITIONS[alert.condition as AlertCondition] ?? alert.condition;
+		return `🔔 ${alert.exchange}:${alert.symbol} — ${label} ${alert.threshold} (now ${value}${quote ? `, close ${quote.currency} ${quote.close} on ${quote.date}` : ""})${alert.note ? `\n${alert.note}` : ""}`;
 	}
 
 	/** Returns the observed value if the alert condition is met, else null. */
 	private evaluate(alert: AlertRow): number | null {
-		const quote = this.db.latestQuote(alert.exchange, alert.symbol);
+		const quote = this.db.market.latestQuote(alert.exchange, alert.symbol);
 		if (!quote) return null;
 		const t = alert.threshold;
 		switch (alert.condition as AlertCondition) {
@@ -124,7 +136,7 @@ export class AlertService {
 			case "rsi-above":
 			case "rsi-below": {
 				const value = rsi(
-					this.db.history(alert.exchange, alert.symbol, 120).map((b) => b.close),
+					this.db.market.history(alert.exchange, alert.symbol, 120).map((b) => b.close),
 					14,
 				).at(-1);
 				if (value === undefined || Number.isNaN(value)) return null;
@@ -132,7 +144,7 @@ export class AlertService {
 				return hit ? round(value, 1) : null;
 			}
 			case "volume-spike": {
-				const bars = this.db.history(alert.exchange, alert.symbol, 21);
+				const bars = this.db.market.history(alert.exchange, alert.symbol, 21);
 				if (bars.length < 11 || quote.volume === null) return null;
 				const avg =
 					sma(

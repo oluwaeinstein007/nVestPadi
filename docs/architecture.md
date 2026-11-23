@@ -4,30 +4,86 @@
 
 ```text
 src/
-├── cli/            nvest command-line interface (+ terminal formatting)
-├── server/         REST API + static dashboard (node:http)
-├── app.ts          composition root — builds every service from Config
-├── config.ts       the ONLY module that reads process.env (zod-validated)
-├── scheduler.ts    periodic sync + alert check
+├── cli/
+│   ├── index.ts        entry: argument parsing, help, error → exit code
+│   ├── command.ts      Command type, flag helpers, `cliUser` (--user / owner)
+│   ├── commands/       market · portfolio (watchlist, alerts) · research · system (serve, doctor, users)
+│   └── format.ts       terminal tables, colours, sparklines
+├── server/
+│   ├── server.ts       request pipeline: security headers → principal → CSRF → route → JSON
+│   ├── router.ts       tiny router; routes are private unless `access: "public"`
+│   ├── http.ts         context, body/JSON, cookies, client IP
+│   ├── rateLimit.ts    sliding-window limiter
+│   ├── static.ts       pages + assets, with per-page guards (guest / user / onboarded)
+│   └── routes/         auth · account · market (data, watchlist, alerts) · platform (AI, billing, admin)
+├── app.ts              composition root — builds every service from Config
+├── config.ts           the ONLY module that reads process.env (zod-validated)
+├── version.ts          single source of the app version
+├── scheduler.ts        periodic sync + alert check
 ├── services/
-│   ├── marketService.ts    sources → SQLite (→ knowledge base)
-│   ├── knowledgeBase.ts    embed + upsert + search; URL/file ingestion
-│   ├── insightService.ts   grounded "ask" (context assembly + LLM)
-│   └── alertService.ts     alert evaluation + Telegram/Discord delivery
-├── analysis/
-│   ├── technicalAnalysis.ts  pure indicator functions
-│   ├── report.ts             per-security report & summary
-│   └── market.ts             breadth, sectors, screener
-├── markets/        data sources (ngx.ts, yahoo.ts) + shared types
-├── ingestion/      webCrawler, documentParser (PDF/HTML/CSV/…), textSplitter
-├── storage/        database.ts (node:sqlite), vectorStore.ts (Qdrant)
-├── ai/provider.ts  OpenAI / Gemini embeddings + chat over REST
-└── lib/            http (retry/timeout), logger, shutdown, util
-public/             landing page (/), dashboard (/app) and screenshots — vanilla HTML/CSS/JS, no build step
-test/               node:test suites
+│   ├── authService.ts       sign-up/in, sessions, verification, password reset, API-token auth
+│   ├── accountService.ts    profile, delivery settings, onboarding, usage metering, tokens, deletion
+│   ├── plans.ts             Free/Pro limits; self-hosted = unlimited
+│   ├── billingService.ts    Paystack checkout, manage link, signed webhooks
+│   ├── mailer.ts · emails.ts  Resend (or log) + transactional templates
+│   ├── notifier.ts          per-user email / Telegram / Discord delivery
+│   ├── alertService.ts      per-user alerts, evaluation, digests
+│   ├── watchlistService.ts  per-user watchlists with plan limits
+│   ├── marketService.ts     sources → SQLite (→ knowledge base)
+│   ├── knowledgeBase.ts     embed + upsert + search; URL/file ingestion
+│   └── insightService.ts    grounded "ask" (context assembly + LLM)
+├── analysis/           technicalAnalysis (pure indicators) · report · market (breadth, screener)
+├── markets/            data sources (ngx.ts, yahoo.ts) + shared types
+├── ingestion/          webCrawler, documentParser (PDF/HTML/CSV/…), textSplitter
+├── storage/
+│   ├── database.ts     connection, migrations, transactions, statement cache
+│   ├── migrations.ts   ordered schema migrations
+│   ├── repositories/   market · knowledge · users (sessions, tokens) · watchlist · alerts · usage
+│   └── vectorStore.ts  Qdrant
+├── ai/provider.ts      OpenAI / Gemini embeddings + chat over REST
+└── lib/                errors (AppError → HTTP status), crypto (scrypt, tokens), http, logger, shutdown, util
+public/
+├── index.html          landing (pricing, self-host, FAQ, live NGX teaser)
+├── auth.html           login / signup / forgot / reset / verify — one shell, view chosen by path
+├── welcome.html        3-step onboarding
+├── app.html            dashboard
+├── settings.html       account settings
+├── terms.html · privacy.html
+└── js/                 ES modules, no build step: core (api, toasts, theme, user menu) · dashboard · chart · auth · welcome · settings · landing
+test/                   node:test suites (unit, service, HTTP, migration, static-site checks)
 ```
 
-The CLI and the server both call `createApp(config)`, so they share the same behaviour. Services receive their dependencies through their constructors, which makes them easy to test with an in-memory DB and stub AI/vector stores (see `test/ai.test.ts`).
+The CLI and the server both call `createApp(config)`, so they share the same behaviour. Services receive their dependencies through their constructors, which makes them easy to test with an in-memory DB, a capturing mailer and stub AI/vector stores.
+
+## Product modes
+
+`APP_MODE` switches between the hosted product and a private server without forking code:
+
+- **Entitlements** come from `limitsFor(user, mode)`: Free/Pro limits in cloud mode, unlimited when self-hosted. Services enforce them (`PlanLimitError` → HTTP 402), so the CLI and API can't bypass them.
+- **Sign-up** is open in cloud mode. Self-hosted, the first account becomes the admin and sign-up closes. `ALLOW_SIGNUP` overrides either default.
+- **Billing** is enabled only in cloud mode with Paystack configured. Paystack webhooks drive plan state. `currentPlan()` also drops a Pro plan to Free once its renewal date is more than 7 days past, a safety net for missed webhooks.
+
+## Request pipeline
+
+```text
+request ─► security headers ─► resolve principal (Bearer nvp_… token, else session cookie)
+        ├─ non-/api: StaticSite.resolve → page guard → redirect (/login?next=…, /welcome, /app) or asset
+        └─ /api: route match ─► CSRF same-origin check (cookie-auth or anonymous, non-GET)
+                 ─► read body ─► authorize (public | user | admin) ─► rate limit ─► handler ─► JSON
+errors: AppError subclasses carry status + code; ZodError → 400; anything else → 500 (message hidden in production)
+```
+
+## Data model
+
+```text
+securities, daily_prices      shared market data (source of truth for analysis)
+indexed_chunks                ledger of what's embedded in Qdrant
+users                         email (NOCASE unique), scrypt hash, role, plan, verification, onboarding, delivery settings, billing refs
+sessions, auth_tokens         SHA-256 hashed tokens with expiry; purged after each sync
+api_tokens                    SHA-256 hashed personal tokens (prefix kept for display)
+usage                         per-user daily counters (AI questions)
+watchlist, alerts             per user (ON DELETE CASCADE); rows from v2 have user_id NULL until the first account claims them
+```
 
 ## Data flow
 
@@ -37,7 +93,7 @@ The CLI and the server both call `createApp(config)`, so they share the same beh
   nvest sync → MarketService.sync ──► SQLite (securities, daily_prices)
                       │                    │
                       │ (AI + Qdrant set)  ├─► analysis/* (reports, screener, breadth)
-                      ▼                    └─► AlertService.check ─► Telegram / Discord
+                      ▼                    └─► AlertService.check ─► Notifier (per user: email / Telegram / Discord)
                KnowledgeBase.indexQuotes
                       │
   nvest ingest ───────┴─► embed (changed chunks only) ─► Qdrant
@@ -55,9 +111,15 @@ The CLI and the server both call `createApp(config)`, so they share the same beh
 
 **Self-sizing collection.** The Qdrant collection is created on first write with the dimension of the first embedding. A later mismatch, such as switching models, fails with an actionable message.
 
-**Graceful capability tiers.** Market features need nothing. `ask` needs an AI provider. `search` and `ingest` need AI plus Qdrant. A missing capability raises `FeatureUnavailableError`, which the CLI shows as a hint and the API returns as a 503.
+**Graceful capability tiers.** Market features need nothing. `ask` needs an AI provider. `search` and `ingest` need AI plus Qdrant. Email, Telegram and billing each light up when their variables are set. A missing capability raises `FeatureUnavailableError`, which the CLI shows as a hint and the API returns as a 503.
 
-**Schema migrations.** `database.ts` holds an ordered `MIGRATIONS` array, applied in transactions and tracked with `PRAGMA user_version`. To change the schema, append a new entry and never edit an old one.
+**Schema migrations.** `storage/migrations.ts` holds an ordered array, applied in transactions and tracked with `PRAGMA user_version`. To change the schema, append a new entry and never edit an old one.
+
+**No auth dependencies.** Passwords (scrypt), tokens and HMAC verification use `node:crypto`. Sessions are server-side rows rather than JWTs, so sign-out, "sign out everywhere" and password changes take effect immediately.
+
+**Secure by default.** Routes are private unless marked public, HTML pages are reachable only through guarded page routes, and every user-owned query takes the user's ID.
+
+**The research library is shared.** Documents are ingested by the operator (CLI) and serve every user's answers. Per-user document uploads would need a `userId` payload filter in Qdrant and an upload route.
 
 ## Grounded answers
 
@@ -73,5 +135,7 @@ The system prompt restricts the model to that context and requires inline `[n]` 
 
 - **New exchange.** Add a fetcher in `src/markets/` that returns `MarketSnapshot`, add the code to `EXCHANGES`/`CURRENCY` in `types.ts`, then branch on it in `MarketService.sync` and `loadHistory`.
 - **New alert condition.** Add it to `ALERT_CONDITIONS` and a `case` in `AlertService.evaluate`. The CLI, API validation and dashboard pick it up automatically.
+- **New plan or limit.** Edit `PLANS` / `PlanLimits` in `services/plans.ts`, enforce it in the owning service, and update the pricing copy in `public/index.html` (a test checks they match).
+- **New API route.** Add it to the matching module in `server/routes/`. Pass `{ access: "public" }` only if it must work signed out.
 - **New document format.** Add a `case` in `parseDocument` and list the extension in `SUPPORTED_EXTENSIONS`.
 - **New AI provider.** Implement `AIProvider` in `src/ai/provider.ts`, then extend `AIProviderName` and `DEFAULT_MODELS` in `config.ts`.

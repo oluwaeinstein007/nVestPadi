@@ -1,0 +1,115 @@
+/** Market data, screener, security detail, watchlist and alerts. */
+import { z } from "zod";
+import { SCREEN_SORTS, marketOverview, screen } from "../../analysis/market.js";
+import type { App } from "../../app.js";
+import { NotFoundError } from "../../lib/errors.js";
+import type { Exchange } from "../../markets/types.js";
+import { ALERT_CONDITIONS } from "../../services/alertService.js";
+import { rateLimiter } from "../rateLimit.js";
+import type { Router } from "../router.js";
+import { exchangeSchema, optionalNumber, queryObject } from "./shared.js";
+
+const SNAPSHOT_TTL_MS = 5 * 60_000;
+
+export function marketRoutes(r: Router, app: App) {
+	const resolveTarget = (symbol: string, exchange?: string) =>
+		app.market.resolve(symbol, exchange ? exchangeSchema.parse(exchange) : undefined);
+
+	// -- Public teaser for the landing page (cached, no per-user data) -------------
+	const snapshots = new Map<Exchange, { at: number; data: unknown }>();
+	r.get(
+		"/api/public/snapshot",
+		(ctx) => {
+			const exchange = exchangeSchema.parse(ctx.query.get("exchange") ?? "NGX");
+			const cached = snapshots.get(exchange);
+			if (cached && Date.now() - cached.at < SNAPSHOT_TTL_MS) return cached.data;
+			const o = marketOverview(app.db, exchange, 5);
+			const slim = (list: typeof o.gainers) =>
+				list.map((q) => ({ symbol: q.symbol, name: q.name, close: q.close, changePct: q.changePct }));
+			const data = {
+				exchange,
+				date: o.date,
+				count: o.count,
+				advancers: o.advancers,
+				decliners: o.decliners,
+				unchanged: o.unchanged,
+				gainers: slim(o.gainers),
+				losers: slim(o.losers),
+			};
+			snapshots.set(exchange, { at: Date.now(), data });
+			return data;
+		},
+		{ access: "public", limit: rateLimiter(60, 60_000) },
+	);
+
+	// -- Market ----------------------------------------------------------------------
+	r.get("/api/market", ({ query }) =>
+		marketOverview(
+			app.db,
+			exchangeSchema.parse(query.get("exchange") ?? "NGX"),
+			Math.min(50, Number(query.get("top")) || 8),
+		),
+	);
+
+	r.get("/api/screen", ({ query }) => {
+		const q = z
+			.object({
+				exchange: exchangeSchema.default("NGX"),
+				sector: z.string().optional(),
+				search: z.string().optional(),
+				sort: z.enum(SCREEN_SORTS).default("gainers"),
+				minPrice: optionalNumber,
+				maxPrice: optionalNumber,
+				rsiBelow: optionalNumber,
+				rsiAbove: optionalNumber,
+				limit: z.coerce.number().int().min(1).max(500).default(100),
+			})
+			.parse(queryObject(query));
+		return screen(app.db, { ...q, query: q.search });
+	});
+
+	r.get("/api/securities", ({ query }) => {
+		const ex = query.get("exchange");
+		return app.db.market.searchSecurities(query.get("q") ?? "", ex ? exchangeSchema.parse(ex) : undefined, 12);
+	});
+
+	r.get("/api/securities/:exchange/:symbol", async (ctx) => {
+		const exchange = exchangeSchema.parse(ctx.params.exchange);
+		const report = await app.market.report(ctx.params.symbol as string, exchange);
+		const history = app.db.market.history(exchange, report.security.symbol, 260);
+		return { report, history, watched: app.watchlists.has(ctx.user, exchange, report.security.symbol) };
+	});
+
+	// -- Watchlist ---------------------------------------------------------------------
+	r.get("/api/watchlist", (ctx) => app.watchlists.list(ctx.user));
+	r.post("/api/watchlist", async (ctx) => {
+		const b = z.object({ symbol: z.string().min(1).max(24), exchange: z.string().optional() }).parse(ctx.body);
+		await app.watchlists.add(ctx.user, b.symbol, b.exchange ? exchangeSchema.parse(b.exchange) : undefined);
+		return app.watchlists.list(ctx.user);
+	});
+	r.delete("/api/watchlist/:exchange/:symbol", (ctx) => {
+		app.watchlists.remove(ctx.user, ctx.params.symbol as string, exchangeSchema.parse(ctx.params.exchange));
+		return app.watchlists.list(ctx.user);
+	});
+
+	// -- Alerts ------------------------------------------------------------------------
+	r.get("/api/alerts", (ctx) => app.alerts.list(ctx.user));
+	r.post("/api/alerts", (ctx) => {
+		const b = z
+			.object({
+				symbol: z.string().min(1).max(24),
+				exchange: z.string().optional(),
+				condition: z.enum(Object.keys(ALERT_CONDITIONS) as [keyof typeof ALERT_CONDITIONS]),
+				threshold: z.coerce.number().finite(),
+				note: z.string().max(200).optional(),
+			})
+			.parse(ctx.body);
+		const t = resolveTarget(b.symbol, b.exchange);
+		return app.alerts.add(ctx.user, { ...t, condition: b.condition, threshold: b.threshold, note: b.note });
+	});
+	r.post("/api/alerts/:id/rearm", (ctx) => app.alerts.rearm(ctx.user, Number(ctx.params.id)));
+	r.delete("/api/alerts/:id", (ctx) => {
+		if (!app.alerts.remove(ctx.user, Number(ctx.params.id))) throw new NotFoundError("Alert not found");
+		return { removed: Number(ctx.params.id) };
+	});
+}

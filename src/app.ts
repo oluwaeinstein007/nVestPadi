@@ -6,10 +6,16 @@ import { type AIProvider, createAIProvider } from "./ai/provider.js";
 import type { Config } from "./config.js";
 import { errorMessage, logger } from "./lib/logger.js";
 import type { Exchange } from "./markets/types.js";
-import { AlertService, Notifier, type TriggeredAlert } from "./services/alertService.js";
+import { AccountService } from "./services/accountService.js";
+import { AlertService, type TriggeredAlert } from "./services/alertService.js";
+import { AuthService } from "./services/authService.js";
+import { BillingService } from "./services/billingService.js";
 import { InsightService } from "./services/insightService.js";
 import { KnowledgeBase } from "./services/knowledgeBase.js";
+import { type Mailer, createMailer } from "./services/mailer.js";
 import { MarketService, type SyncResult } from "./services/marketService.js";
+import { Notifier } from "./services/notifier.js";
+import { WatchlistService } from "./services/watchlistService.js";
 import { Database } from "./storage/database.js";
 import { VectorStore } from "./storage/vectorStore.js";
 
@@ -18,11 +24,16 @@ export interface App {
 	db: Database;
 	ai: AIProvider | null;
 	vectors: VectorStore | null;
+	mailer: Mailer;
 	kb: KnowledgeBase;
 	market: MarketService;
 	insights: InsightService;
-	alerts: AlertService;
 	notifier: Notifier;
+	alerts: AlertService;
+	watchlists: WatchlistService;
+	auth: AuthService;
+	accounts: AccountService;
+	billing: BillingService;
 	/** Sync one or more exchanges, then evaluate alerts. Partial failures are reported, not thrown. */
 	syncAndAlert(
 		exchanges: Exchange[],
@@ -38,26 +49,38 @@ export interface HealthCheck {
 	detail: string;
 }
 
-export function createApp(config: Config): App {
+export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): App {
 	const db = new Database(config.databasePath);
 	const ai = createAIProvider(config.ai);
 	const vectors = config.qdrant ? new VectorStore(config.qdrant) : null;
+	const mailer = overrides.mailer ?? createMailer(config.email);
 	const kb = new KnowledgeBase(db, ai, vectors);
 	const market = new MarketService(db, kb, config.markets.usSymbols);
 	const insights = new InsightService(db, ai, kb, market);
-	const notifier = new Notifier(config.notifications);
-	const alerts = new AlertService(db, notifier);
+	const notifier = new Notifier(mailer, config.telegramBotToken, config.mode, config.appUrl);
+	const alerts = new AlertService(db, notifier, config.mode);
+	const watchlists = new WatchlistService(db, market, config.mode);
+	const auth = new AuthService(db, mailer, config);
+	const accounts = new AccountService(db, auth, notifier, watchlists, config.mode);
+	const billing = new BillingService(db, config.billing, config.appUrl, config.mode);
+
+	for (const warning of config.warnings) logger.warn(warning);
 
 	return {
 		config,
 		db,
 		ai,
 		vectors,
+		mailer,
 		kb,
 		market,
 		insights,
-		alerts,
 		notifier,
+		alerts,
+		watchlists,
+		auth,
+		accounts,
+		billing,
 
 		async syncAndAlert(exchanges, options = {}) {
 			const results: SyncResult[] = [];
@@ -71,6 +94,7 @@ export function createApp(config: Config): App {
 				}
 			}
 			const triggered = await alerts.check();
+			db.users.purgeExpired();
 			return { results, errors, triggered };
 		},
 
@@ -78,9 +102,32 @@ export function createApp(config: Config): App {
 			const checks: HealthCheck[] = [];
 			const stats = db.stats();
 			checks.push({
+				name: "Mode",
+				status: "ok",
+				detail: `${config.mode} · ${config.appUrl}`,
+			});
+			checks.push({
 				name: "Database",
 				status: "ok",
-				detail: `${config.databasePath} — ${stats.securities} securities, ${stats.prices} price rows${stats.lastPriceDate ? `, latest ${stats.lastPriceDate}` : ""}`,
+				detail: `${config.databasePath} — schema v${db.schemaVersion}, ${stats.securities} securities, ${stats.prices} price rows${stats.lastPriceDate ? `, latest ${stats.lastPriceDate}` : ""}`,
+			});
+
+			const signup = auth.signupStatus();
+			checks.push({
+				name: "Accounts",
+				status: stats.users === 0 ? "warn" : "ok",
+				detail:
+					stats.users === 0
+						? `No accounts yet — sign up at ${config.appUrl}/signup (the first account becomes the owner)`
+						: `${stats.users} account${stats.users === 1 ? "" : "s"} · sign-up ${signup.open ? "open" : "closed"}`,
+			});
+
+			checks.push({
+				name: "Email",
+				status: mailer.delivers ? "ok" : config.mode === "cloud" ? "error" : "warn",
+				detail: mailer.delivers
+					? `Resend · from ${config.email?.from}`
+					: "Not configured — verification/reset links are written to the server log. Set RESEND_API_KEY + EMAIL_FROM",
 			});
 
 			if (!ai) {
@@ -123,17 +170,32 @@ export function createApp(config: Config): App {
 				}
 			}
 
-			const channels = notifier.channels;
 			checks.push({
-				name: "Alert delivery",
-				status: channels.length ? "ok" : "warn",
-				detail: channels.length ? channels.join(", ") : "No channel configured — alerts only show in CLI/dashboard",
+				name: "Telegram",
+				status: config.telegramBotToken ? "ok" : "off",
+				detail: config.telegramBotToken
+					? "Bot configured — users add their chat ID in Settings"
+					: "Set TELEGRAM_BOT_TOKEN to offer Telegram alerts",
 			});
+
+			if (config.mode === "cloud") {
+				checks.push({
+					name: "Billing",
+					status: billing.enabled ? "ok" : "warn",
+					detail: billing.enabled
+						? `Paystack · plan ${config.billing?.planCode} · webhook ${config.appUrl}/api/billing/webhook`
+						: "Not configured — everyone stays on Free. Set PAYSTACK_SECRET_KEY + PAYSTACK_PLAN_CODE",
+				});
+			}
+
+			const exposed = config.server.host !== "127.0.0.1" && config.server.host !== "localhost";
 			checks.push({
 				name: "API server",
-				status: config.server.apiKey ? "ok" : config.server.host === "127.0.0.1" ? "ok" : "warn",
-				detail: `${config.server.host}:${config.server.port}${config.server.apiKey ? " · API key required" : config.server.host === "127.0.0.1" ? " · local only" : " · exposed without API_KEY"}`,
+				status: exposed && !config.auth.secureCookies && config.env === "production" ? "warn" : "ok",
+				detail: `${config.server.host}:${config.server.port}${exposed && !config.auth.secureCookies ? " · serve it over HTTPS (APP_URL=https://…) before exposing it" : ""}`,
 			});
+
+			for (const warning of config.warnings) checks.push({ name: "Config", status: "warn", detail: warning });
 			return checks;
 		},
 

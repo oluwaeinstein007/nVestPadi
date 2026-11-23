@@ -4,16 +4,16 @@
 
 # nVestPadi
 
-**An open-source AI research desk for Nigerian (NGX) and US stocks.**
+**The AI research desk for Nigerian (NGX) and US stocks.**
 
-Daily market sync · technical analysis · screener · alerts · AI answers that cite their sources
+Daily market data · plain-English technical reports · screener · email & Telegram alerts · AI answers that cite their sources
 
 [![CI](https://github.com/oluwaeinstein007/nVestPadi/actions/workflows/ci.yml/badge.svg)](https://github.com/oluwaeinstein007/nVestPadi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0b7a4b.svg)](LICENSE)
 ![Node ≥ 22.13](https://img.shields.io/badge/node-%E2%89%A522.13-0b7a4b.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)
 
-[Quick start](#quick-start) · [Features](#features) · [CLI](#cli) · [API](#rest-api) · [Deploy](#deploy) · [Architecture](docs/architecture.md)
+[Product](#the-product) · [Self-host](#self-host-in-3-commands) · [Run the hosted product](#run-it-as-a-hosted-product) · [CLI](#cli) · [API](#rest-api) · [Architecture](docs/architecture.md) · [Upgrading](docs/upgrading.md)
 
 <br />
 
@@ -30,75 +30,90 @@ Daily market sync · technical analysis · screener · alerts · AI answers that
 
 Researching Nigerian stocks usually means juggling the NGX website, broker PDFs, spreadsheets and WhatsApp groups. nVestPadi puts it in one place:
 
-- **Market data built in.** It pulls the full NGX daily board (about 150 equities) and any US tickers. You don't need a data subscription or API keys.
+- **Market data built in.** The full NGX daily board (about 150 equities) and any US tickers, with no data subscription.
 - **Analysis you can read.** Every stock gets a technical report in plain English, not just a chart.
-- **Alerts where you already are.** It pings Telegram or Discord when a price, RSI or volume condition hits.
-- **AI that shows its work.** Ask a question and the answer cites the market data and documents it used. It's instructed never to invent figures.
-- **Yours to run.** It runs on your laptop or a $5 server. Your watchlist and research never leave it.
+- **Alerts where you already are.** Email, Telegram or Discord when a price, RSI or volume condition hits.
+- **AI that shows its work.** Answers cite the market data and documents they used, and the model is told never to invent figures.
+- **Hosted or yours.** Sign up for the hosted app, or run the same code on your own server with every feature unlocked.
 
-## Features
+## The product
+
+One codebase, two ways to run it, chosen with `APP_MODE`:
+
+| | **Cloud** (`APP_MODE=cloud`) | **Self-hosted** (`APP_MODE=self-hosted`, default) |
+|---|---|---|
+| Who signs up | Anyone (open sign-up, terms acceptance) | The first account becomes the **owner**; sign-up then closes and the owner adds people with `nvest users create` |
+| Plans | Free and Pro, enforced server-side | No plans, everything unlimited |
+| Billing | Paystack subscriptions (card, transfer, USSD) | None |
+| Email | Resend: verification, password reset, alert emails | Optional; without it, links are written to the server log |
+
+### User journey
+
+```text
+Landing (/) ── Start free ──► Sign up (/signup) ──► Onboarding (/welcome) ──► Dashboard (/app)
+   │                              │  verify-email link          1. pick a market         │
+   │                              ▼  (banner until confirmed)   2. pick stocks to watch  ├─► Stock detail (/app#NGX:GTCO)
+   └── Log in (/login) ◄── Forgot password (/forgot-password)   3. set alert delivery    └─► Settings (/app/settings)
+                                   └─► Reset (/reset-password)                               profile · alert delivery · plan & billing
+                                                                                             security & sessions · API tokens · delete account
+```
+
+Pages are guarded on the server: signed-out visitors are sent to `/login?next=…`, signed-in users skip the login page, and anyone who hasn't finished onboarding lands on `/welcome` first.
+
+### Plans (cloud mode)
+
+| | Free | Pro (₦4,500/month) |
+|---|---|---|
+| Market dashboard, reports, screener | ✓ | ✓ |
+| Watchlist | 10 stocks | 100 stocks |
+| Active alerts | 3 | 50 |
+| AI questions | 5 / day | 100 / day |
+| Alert delivery | Email, Telegram | Email, Telegram, Discord |
+
+Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps the landing page's pricing copy in sync with them. Hitting a limit returns HTTP `402` with `code: "plan_limit"`, and the UI offers an upgrade.
+
+### Features
 
 | | |
 |---|---|
 | 📊 **Market breadth** | Advancers vs decliners, value traded, top gainers and losers, the most traded stocks, and every sector ranked by its move |
 | 📈 **Technical reports** | Trend, RSI, MACD, SMA 20/50/200, Bollinger Bands, ATR, volatility, 52-week range, 1W–1Y performance and BUY/SELL signals with reasons |
 | 🔎 **Screener** | Filter by sector, name, price and RSI (e.g. *oversold banks*); sort by gainers, losers, value, volume or RSI |
-| ⭐ **Watchlist** | Track NGX and US symbols side by side with sparklines |
-| 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`, delivered to Telegram and/or Discord |
-| 💬 **Ask AI** | Answers grounded in live reports, market breadth and your ingested research, with numbered citations |
-| 📄 **Research ingestion** | Annual-report PDFs, HTML, CSV, JSON, Markdown, or whole websites (robots.txt-aware); unchanged content is never re-embedded |
-| 🖥️ **Web app + CLI** | Responsive light/dark dashboard, a landing page, a REST API and a scriptable `nvest` CLI (`--json` everywhere) |
-| ⏱️ **Automation** | `--sync-every 60` keeps data fresh and checks alerts on a schedule |
+| ⭐ **Watchlist** | Per-user NGX and US symbols side by side, with sparklines |
+| 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`; one digest per user per sync; re-arm after firing |
+| 💬 **Ask AI** | Answers grounded in live reports, market breadth and the research library, with numbered citations |
+| 📄 **Research library** | Annual-report PDFs, HTML, CSV, JSON, Markdown, or whole websites (robots.txt-aware), added by the operator with `nvest ingest` |
+| 👤 **Accounts** | Email/password sign-up, email verification, password reset, session management, personal API tokens, account deletion |
+| 🖥️ **Web app + CLI** | Landing page, responsive light/dark app, REST API and a scriptable `nvest` CLI (`--json` everywhere) |
 
-<table>
-  <tr>
-    <td width="50%">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="public/img/detail-dark.webp" />
-        <img src="public/img/detail-light.webp" alt="Stock detail: price chart with moving averages, signal badge, performance and indicators" />
-      </picture>
-    </td>
-    <td>
-      <b>From ticker to thesis in one click</b><br /><br />
-      Open any stock for an interactive chart with SMA overlays, a BUY/SELL signal with its reasoning, performance from 1W to 1Y, and indicator cards that explain what each number means.<br /><br />
-      Links are shareable, e.g. <code>/app#NGX:GTCO</code>.
-    </td>
-  </tr>
-</table>
+## Self-host in 3 commands
 
-## Quick start
-
-Requires **Node.js ≥ 22.13** and **pnpm**.
+Requires **Node.js ≥ 22.13** and **pnpm**. No `.env` is needed.
 
 ```bash
 git clone https://github.com/oluwaeinstein007/nVestPadi
 cd nVestPadi && pnpm install
+pnpm nvest serve --sync-every 60   # → http://127.0.0.1:3000
+```
 
+Open the app and you're sent to **/signup** to create the owner account. Any watchlist or alerts from an older version are handed to that account. You can also create it from the terminal:
+
+```bash
+pnpm nvest users create you@example.com --name "Your Name"   # prints a temporary password
+```
+
+The CLI works without the web app too:
+
+```bash
 pnpm nvest sync            # today's NGX + US prices
 pnpm nvest market          # breadth, movers, sectors
 pnpm nvest analyze DANGCEM # technical report
-pnpm nvest serve           # landing → http://127.0.0.1:3000, dashboard → /app
+pnpm nvest doctor          # check your setup
 ```
 
-No `.env` is needed for any of the above. Run `pnpm nvest doctor` at any time to check your setup.
-
-```text
-$ pnpm nvest market
-
-NGX market  session 2026-11-20
-  ▲ 17  ▼ 39  ■ 90   volume 305.6M   value 16.5B
-
-Top gainers
-  Symbol     Name                          Price   Change  Value
-  MAYBAKER   May & Baker Nigeria           44.00  +10.00%  65.6M
-  CORNERST   Cornerstone Insurance Compan   5.00   +9.89%  17.4M
-```
+**Docker:** `cp .env.example .env && docker compose up -d` starts the app with Qdrant and an hourly sync on `127.0.0.1:3000`.
 
 ### Turn on AI (optional)
-
-```bash
-cp .env.example .env
-```
 
 ```ini
 AI_PROVIDER=gemini                 # or openai
@@ -111,7 +126,29 @@ pnpm nvest ingest file ./reports/gtco-2025-annual.pdf
 pnpm nvest ask "How did Nigerian banks trade this week?"
 ```
 
-`ask` works without Qdrant too. It then answers from market data alone. Qdrant adds your documents and semantic `search`.
+`ask` works without Qdrant too; it then answers from market data alone. Qdrant adds the research library and semantic `search`.
+
+## Run it as a hosted product
+
+1. **Configure** (see [`.env.example`](.env.example)):
+
+   ```ini
+   APP_MODE=cloud
+   NODE_ENV=production
+   APP_URL=https://app.yourdomain.com   # https → Secure cookies + HSTS
+   HOST=0.0.0.0
+   TRUST_PROXY=true                     # behind a load balancer / reverse proxy
+   RESEND_API_KEY=re_…                  # verification, reset and alert emails
+   EMAIL_FROM="nVestPadi <hello@yourdomain.com>"
+   PAYSTACK_SECRET_KEY=sk_live_…
+   PAYSTACK_PLAN_CODE=PLN_…             # a monthly "Pro" plan in Paystack
+   TELEGRAM_BOT_TOKEN=…                 # optional
+   ```
+
+2. **Paystack:** create the monthly plan, then set the webhook URL to `https://app.yourdomain.com/api/billing/webhook`. The webhook is the source of truth for plan changes. It's verified with the HMAC-SHA512 signature, upgrades on `subscription.create` / `charge.success`, and downgrades on `subscription.disable`.
+3. **Deploy:** [`render.yaml`](render.yaml) is a ready Render blueprint (Docker + a 1 GB disk for SQLite). Any Docker host works: mount `/data`, expose port 3000, put HTTPS in front.
+4. **Check:** `nvest doctor` reports the mode, accounts, email, billing and AI status. In cloud mode a missing email service shows as an error.
+5. **Operate:** `nvest users list | set-plan <email> pro | set-role <email> admin | set-password <email>` for support and comps. `nvest sync` (or `serve --sync-every`) refreshes data and delivers alerts to every account.
 
 ## CLI
 
@@ -119,112 +156,109 @@ pnpm nvest ask "How did Nigerian banks trade this week?"
 
 | Command | Description |
 |---|---|
-| `sync [ngx\|us\|all]` | Fetch the latest session, store it, index it and check alerts. `--symbols A,B` `--no-index` `--every MIN` |
+| `sync [ngx\|us\|all]` | Fetch the latest session, store it, index it and check every account's alerts. `--symbols A,B` `--no-index` `--every MIN` |
 | `history <SYM>` | Backfill daily history. `--exchange` `--range 1mo…max` |
 | `quote <SYM...>` | Latest stored quotes |
 | `analyze <SYM>` | Full technical report |
 | `market` | Breadth, movers, sectors. `--exchange NGX\|US` `--top N` |
 | `screen` | Screener. `--sector` `--search` `--sort` `--min-price` `--max-price` `--rsi-below` `--rsi-above` `--limit` |
-| `watchlist [list\|add\|remove]` | Manage your watchlist |
-| `alerts [list\|add\|remove\|check]` | e.g. `alerts add GTCO above 130 --note "breakout"` |
-| `ingest url <URL>` · `ingest file <PATH...>` · `ingest list` | Add research to the knowledge base |
+| `watchlist [list\|add\|remove]` | A user's watchlist (`--user email`, default: the owner) |
+| `alerts [list\|add\|remove\|rearm\|check]` | e.g. `alerts add GTCO above 130 --note "breakout"` (`--user email`) |
+| `users [list\|create\|set-password\|set-plan\|set-role\|delete]` | Manage accounts |
+| `ingest url <URL>` · `ingest file <PATH...>` · `ingest list` | Add to the research library |
 | `search <query>` | Semantic search across everything indexed |
 | `ask "<question>"` | Grounded AI answer with sources |
-| `serve` | Landing page, dashboard and REST API. `--port` `--sync-every MIN` |
-| `doctor` | Check config, AI provider, Qdrant and alert channels |
-
-Bare tickers resolve automatically (NGX first, then US). Use `--exchange` to disambiguate. To install globally: `pnpm build && pnpm link --global`.
+| `serve` | Landing page, app and REST API. `--port` `--sync-every MIN` |
+| `doctor` | Check mode, accounts, email, billing, AI provider and Qdrant |
 
 ## Configuration
 
-Every variable is optional. [`.env.example`](.env.example) documents each one. Real environment variables override `.env`, and invalid values fail fast with a readable error.
+Every variable is optional, and [`.env.example`](.env.example) documents each one. Real environment variables override `.env`. Invalid values fail fast with a readable error.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AI_PROVIDER` / `AI_API_KEY` | — | `openai` or `gemini`; enables `ask`, `search` and `ingest` |
-| `AI_CHAT_MODEL` / `AI_EMBEDDING_MODEL` | per provider | `gpt-4.1-mini` + `text-embedding-3-small` / `gemini-2.5-flash` + `gemini-embedding-001` |
-| `AI_EMBEDDING_DIMENSIONS` | native | Only to match an existing Qdrant collection |
-| `QDRANT_URL` / `QDRANT_API_KEY` | — | Vector store for documents and semantic search |
-| `QDRANT_COLLECTION` | `nvestpadi` | Created automatically, sized to your embedding model |
-| `DATABASE_PATH` | `data/nvestpadi.db` | SQLite file for prices, watchlist and alerts |
-| `US_SYMBOLS` | top 30 S&P 500 | Tickers for `sync us` |
+| `APP_MODE` | `self-hosted` | `cloud` for the hosted product (open sign-up, plans, billing) |
+| `APP_URL` | `http://localhost:$PORT` | Public URL for email links and payment redirects; `https://` enables Secure cookies + HSTS |
 | `HOST` / `PORT` | `127.0.0.1` / `3000` | Web server bind address |
-| `API_KEY` | — | Require `Authorization: Bearer <key>` on the API |
-| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | — | Telegram alerts |
-| `DISCORD_WEBHOOK_URL` | — | Discord alerts |
+| `TRUST_PROXY` | `false` | Use `X-Forwarded-For` / `-Host` behind a proxy |
+| `ALLOW_SIGNUP` | mode default | Force sign-up open (`true`) or closed (`false`) |
+| `RESEND_API_KEY` + `EMAIL_FROM` | — | Transactional email |
+| `PAYSTACK_SECRET_KEY` + `PAYSTACK_PLAN_CODE` | — | Pro subscriptions (cloud mode) |
+| `TELEGRAM_BOT_TOKEN` | — | Lets users receive alerts on Telegram |
+| `AI_PROVIDER` / `AI_API_KEY` | — | `openai` or `gemini`; enables Ask, search and ingest |
+| `AI_CHAT_MODEL` / `AI_EMBEDDING_MODEL` / `AI_EMBEDDING_DIMENSIONS` | per provider | Model overrides |
+| `QDRANT_URL` / `QDRANT_API_KEY` / `QDRANT_COLLECTION` | — / — / `nvestpadi` | Vector store for the research library |
+| `DATABASE_PATH` | `data/nvestpadi.db` | SQLite file for prices, accounts, watchlists and alerts |
+| `US_SYMBOLS` | top 30 S&P 500 | Tickers for `sync us` |
 | `NODE_ENV` / `LOG_LEVEL` | `development` / `info` | Runtime mode and verbosity |
 
-<details>
-<summary>Upgrading from v1 environment variables</summary>
-
-| v1 | v2 |
-|---|---|
-| `LLM_PROVIDER`, `EMBEDDING_PROVIDER`, `USE_OPENAI_EMBEDDING` | `AI_PROVIDER` |
-| `LLM_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` | `AI_API_KEY` |
-| `GOOGLE_EMBEDDING_MODEL` | `AI_EMBEDDING_MODEL` |
-| `EMBEDDING_VECTOR_SIZE` | removed (auto-detected); `AI_EMBEDDING_DIMENSIONS` if needed |
-| `QDRANT_HOST`, `QDRANT_KEY`, `QDRANT_COLLECTION_NAME` | `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` |
-| `QDRANT_ENABLED` | removed (enabled when `QDRANT_URL` is set) |
-| `SERVER_PORT`, `ENV`, `DATABASE_URL` | `PORT`, `NODE_ENV`, `DATABASE_PATH` |
-| `ALARMS_WHOOK_URL` | `DISCORD_WEBHOOK_URL` |
-| `NGX_PAGES`, `US_HISTORY_RANGE` | removed (automatic pagination; `history --range`) |
-| `MAX_CONCURRENCY`, `CHROME_PATH_ON_HOST`, `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `GOOGLE_APPLICATION_CREDENTIALS`, `TRIGGER_SCRAPPER_*`, `SLEEP_TIME_QUERY` | removed (unused) |
-
-v1 stored vectors without their text, so they can't ground answers. Point v2 at a new `QDRANT_COLLECTION`.
-</details>
+Upgrading from v2 or v1? See [docs/upgrading.md](docs/upgrading.md). The database migrates automatically.
 
 ## REST API
 
-`nvest serve` hosts the landing page (`/`), the dashboard (`/app`) and a JSON API on one port.
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/health` | Liveness (always public) |
-| GET | `/api/status` | Enabled features and data stats |
-| GET | `/api/market?exchange=NGX&top=8` | Breadth, movers, sectors |
-| GET | `/api/screen?exchange=&sector=&search=&sort=&minPrice=&maxPrice=&rsiBelow=&rsiAbove=&limit=` | Screener |
-| GET | `/api/securities?q=` | Ticker/company search |
-| GET | `/api/securities/:exchange/:symbol` | Technical report and price history |
-| GET · POST · DELETE | `/api/watchlist` · `/api/watchlist/:exchange/:symbol` | Watchlist |
-| GET · POST · DELETE | `/api/alerts` · `/api/alerts/:id` | Alerts |
-| POST | `/api/sync` `{"exchange":"all"}` | Trigger a sync |
-| POST | `/api/ask` `{"question":"…"}` | Grounded AI answer |
-| GET | `/api/search?q=` | Semantic search |
-
-**Security:** the server binds to localhost by default. When `API_KEY` is set, every API route except health requires a bearer token, and the dashboard prompts for it. Responses carry a strict CSP and other security headers, request bodies are size-limited, and `ask`, `sync` and `search` are rate-limited per IP.
-
-## Deploy
+`nvest serve` hosts the site, the app and a JSON API on one port. Browsers authenticate with the session cookie. Scripts send a personal API token from Settings → API tokens:
 
 ```bash
-cp .env.example .env      # set AI_*, API_KEY, alert channels…
-docker compose up -d      # app on 127.0.0.1:3000 + Qdrant, syncing hourly
+curl -H "Authorization: Bearer nvp_…" https://app.yourdomain.com/api/watchlist
 ```
 
-The image runs as a non-root user, keeps SQLite on a `/data` volume, includes a health check and shuts down gracefully on `SIGTERM`. Without Docker: `pnpm build && pnpm start`.
+| Method | Path | Access | Description |
+|---|---|---|---|
+| GET | `/api/health` | public | Liveness |
+| GET | `/api/public/snapshot?exchange=NGX` | public | Cached breadth + top movers (landing page) |
+| GET | `/api/auth/session` | public | Current user (or null), mode, sign-up status, plans |
+| POST | `/api/auth/signup` · `login` · `logout` | public | `{name, email, password, acceptTerms}` · `{email, password}` |
+| POST | `/api/auth/forgot-password` · `reset-password` · `verify-email` | public | Email-link flows (always 200 for unknown emails) |
+| POST | `/api/auth/resend-verification` | user | Send a new verification link |
+| GET · PATCH · DELETE | `/api/account` | user | Overview (plan, limits, usage) · profile · delete (password required) |
+| PUT · POST | `/api/account/notifications` · `/test` | user | Email / Telegram / Discord delivery |
+| POST | `/api/account/onboarding` | user | `{defaultExchange, symbols[]}` |
+| POST | `/api/account/password` | user | Change password (signs out other sessions) |
+| GET · DELETE | `/api/account/sessions` | user | List · sign out other sessions |
+| GET · POST · DELETE | `/api/account/tokens` · `/:id` | user | Personal API tokens (shown once) |
+| GET | `/api/market` · `/api/screen` · `/api/securities` · `/api/securities/:exchange/:symbol` | user | Market data, screener, search, report |
+| GET · POST · DELETE | `/api/watchlist` · `/:exchange/:symbol` | user | Watchlist |
+| GET · POST · DELETE | `/api/alerts` · `/:id` · POST `/:id/rearm` | user | Alerts |
+| POST | `/api/ask` · GET `/api/search?q=` | user | Grounded AI answer (metered) · semantic search |
+| POST | `/api/billing/checkout` · `/portal` | user | Paystack checkout / manage-subscription link |
+| POST | `/api/billing/webhook` | signature | Paystack events |
+| POST · GET | `/api/admin/sync` · `/api/admin/overview` | admin | Trigger a sync · user and data stats |
+
+Errors are JSON: `{"error": "human message", "code": "unauthorized" | "forbidden" | "plan_limit" | "invalid_input" | …}`.
+
+## Security
+
+- **Passwords** are hashed with scrypt (per-password salt). Sign-in takes the same time whether or not the account exists.
+- **Sessions** use random 256-bit tokens in an `HttpOnly; SameSite=Lax` cookie (`Secure` over HTTPS). Only SHA-256 hashes are stored. Sessions last 30 days, slide while in use, and are revoked on password change or reset. Users can review and sign out sessions.
+- **CSRF:** every state-changing browser request must carry a same-origin `Origin`/`Referer`. API-token requests are exempt.
+- **One-time links** (verification, reset) are hashed, single-use and short-lived (48 h and 1 h). Only the newest link of each kind works.
+- **Rate limits** apply to sign-in, sign-up and reset (per IP and per email), plus AI and admin routes.
+- **Headers:** strict CSP, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, and HSTS over HTTPS.
+- **Authorization:** routes are private unless explicitly marked public. Every watchlist and alert query is scoped to its owner.
 
 ## How it works
 
 ```text
-NGX API ─┐                       ┌─► reports · screener · breadth ─► CLI / dashboard / API
-Yahoo ───┼─► sync ─► SQLite ─────┼─► alerts ─► Telegram / Discord
+NGX API ─┐                       ┌─► reports · screener · breadth ─► web app / CLI / API
+Yahoo ───┼─► sync ─► SQLite ─────┼─► alerts ─► per-user email / Telegram / Discord
 afx ─────┘              │        └─► ask ─► LLM (answers only from numbered context)
 PDFs / web ─► ingest ─► embeddings ─► Qdrant ──┘
 ```
 
-SQLite is the source of truth for prices. Qdrant only stores text meant for retrieval. Every chunk has a deterministic ID and a content hash, so re-running ingestion is free. See [docs/architecture.md](docs/architecture.md) for design decisions and extension points (new exchanges, alert types, document formats, AI providers).
+SQLite is the source of truth for prices, accounts and user data. Qdrant only stores text meant for retrieval. See [docs/architecture.md](docs/architecture.md) for the layout, design decisions and extension points.
 
 ## Data sources & limitations
 
-- **NGX**: the daily board comes from NGX's public statistics API, and company names from afx.kwayisi.org. Public NGX history covers only about the last 10 sessions, so run `sync` daily (or `serve --sync-every`) to build the longer history that RSI, MACD and moving averages need.
+- **NGX**: the daily board comes from NGX's public statistics API, and company names from afx.kwayisi.org. Public NGX history covers only about the last 10 sessions, so keep `serve --sync-every` running (or `sync` daily) to build the longer history that RSI, MACD and moving averages need.
 - **US**: Yahoo Finance's public chart API. It's end-of-day or delayed and occasionally rate-limited; requests are retried with backoff.
-- These are unofficial public endpoints and may change without notice.
+- These are unofficial public endpoints and may change without notice. A commercial deployment should license its market data.
 
-> **Disclaimer:** nVestPadi is a research and education tool. Nothing it produces is investment advice.
+> **Disclaimer:** nVestPadi is a research and education tool. Nothing it produces is investment advice. The bundled [Terms](public/terms.html) and [Privacy Policy](public/privacy.html) are a starting point; have them reviewed before you operate a hosted service.
 
 ## Development
 
 ```bash
-pnpm dev      # dashboard with auto-reload
+pnpm dev      # server with auto-reload
 pnpm check    # typecheck + Biome lint + node:test suite
 pnpm build    # compile to dist/
 ```

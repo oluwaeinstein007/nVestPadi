@@ -1,4 +1,6 @@
-# Local stack: nVestPadi + Qdrant.  Usage: cp .env.example .env && docker compose up -d
+# Self-hosted stack: nVestPadi + Qdrant.
+# Usage: cp .env.example .env && docker compose up -d, then open http://localhost:3000/signup
+# to create the owner account.
 services:
   app:
     build: .
@@ -6,7 +8,8 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
     ports:
-      # Bound to localhost only. To expose publicly, set API_KEY in .env first.
+      # Bound to localhost only. To expose it, put it behind an HTTPS reverse proxy and set
+      # APP_URL=https://… and TRUST_PROXY=true in .env.
       - "127.0.0.1:3000:3000"
     volumes:
       - nvest-data:/data

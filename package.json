@@ -1,6 +1,6 @@
 {
 	"name": "nvestpadi",
-	"version": "2.0.0",
+	"version": "3.0.0",
 	"description": "AI market intelligence for the Nigerian Exchange (NGX) and US equities: market data sync, technical analysis, screening, alerts, and grounded AI Q&A over your own research.",
 	"type": "module",
 	"license": "MIT",

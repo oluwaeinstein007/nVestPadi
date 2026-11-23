@@ -1,16 +1,23 @@
 /**
  * Application configuration — the single place that reads `process.env`.
  *
- * Every variable is optional: with no configuration at all, nVestPadi still
- * syncs market data, runs technical analysis, screens and alerts. AI features
- * (search, ask, document ingestion) light up once an AI provider and Qdrant
- * are configured. See `.env.example` for documentation of each variable.
+ * Every variable is optional: with no configuration at all, nVestPadi runs as
+ * a self-hosted app that syncs market data, analyzes, screens and alerts.
+ * AI, email delivery and billing light up as their variables are set.
+ * See `.env.example` for documentation of each variable.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 
 export type AIProviderName = "openai" | "gemini";
+
+/**
+ * `cloud`: the hosted product — open sign-up, Free/Pro plans and billing.
+ * `self-hosted`: your own server — the first account is the owner, every
+ * feature is unlimited and sign-up closes once the owner exists.
+ */
+export type AppMode = "cloud" | "self-hosted";
 
 export interface AIConfig {
 	provider: AIProviderName;
@@ -29,16 +36,25 @@ export interface QdrantConfig {
 
 export interface Config {
 	env: "development" | "production" | "test";
+	mode: AppMode;
 	logLevel: "debug" | "info" | "warn" | "error";
+	/** Public base URL, used in emails and payment redirects (no trailing slash). */
+	appUrl: string;
 	databasePath: string;
 	ai: AIConfig | null;
 	qdrant: QdrantConfig | null;
 	markets: { usSymbols: string[] };
-	server: { host: string; port: number; apiKey?: string };
-	notifications: {
-		telegram: { botToken: string; chatId: string } | null;
-		discordWebhookUrl: string | null;
+	server: { host: string; port: number; trustProxy: boolean };
+	auth: {
+		/** null = the mode's default (cloud: open; self-hosted: only until the owner exists). */
+		allowSignup: boolean | null;
+		secureCookies: boolean;
 	};
+	email: { resendApiKey: string; from: string } | null;
+	billing: { paystackSecretKey: string; planCode: string } | null;
+	telegramBotToken: string | null;
+	/** Non-fatal problems, e.g. variables from older versions that are now ignored. */
+	warnings: string[];
 }
 
 export const DEFAULT_MODELS: Record<AIProviderName, { chat: string; embedding: string }> = {
@@ -80,9 +96,15 @@ export const DEFAULT_US_SYMBOLS = [
 	"WMT",
 ];
 
+const bool = z
+	.enum(["true", "false", "1", "0", "yes", "no"])
+	.transform((v) => v === "true" || v === "1" || v === "yes");
+
 const EnvSchema = z
 	.object({
 		NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+		APP_MODE: z.enum(["cloud", "self-hosted"]).default("self-hosted"),
+		APP_URL: z.string().url().optional(),
 		LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 		DATABASE_PATH: z.string().default("data/nvestpadi.db"),
 
@@ -103,11 +125,16 @@ const EnvSchema = z
 
 		HOST: z.string().default("127.0.0.1"),
 		PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-		API_KEY: z.string().optional(),
+		TRUST_PROXY: bool.default("false"),
+		ALLOW_SIGNUP: bool.optional(),
+
+		RESEND_API_KEY: z.string().optional(),
+		EMAIL_FROM: z.string().optional(),
+
+		PAYSTACK_SECRET_KEY: z.string().optional(),
+		PAYSTACK_PLAN_CODE: z.string().optional(),
 
 		TELEGRAM_BOT_TOKEN: z.string().optional(),
-		TELEGRAM_CHAT_ID: z.string().optional(),
-		DISCORD_WEBHOOK_URL: z.string().url().optional(),
 	})
 	.superRefine((env, ctx) => {
 		if (env.AI_PROVIDER && !env.AI_API_KEY) {
@@ -117,14 +144,31 @@ const EnvSchema = z
 				message: `required when AI_PROVIDER=${env.AI_PROVIDER}`,
 			});
 		}
-		if (Boolean(env.TELEGRAM_BOT_TOKEN) !== Boolean(env.TELEGRAM_CHAT_ID)) {
+		if (Boolean(env.PAYSTACK_SECRET_KEY) !== Boolean(env.PAYSTACK_PLAN_CODE)) {
 			ctx.addIssue({
 				code: "custom",
-				path: ["TELEGRAM_CHAT_ID"],
-				message: "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set together",
+				path: ["PAYSTACK_PLAN_CODE"],
+				message: "PAYSTACK_SECRET_KEY and PAYSTACK_PLAN_CODE must be set together",
 			});
 		}
+		if (env.RESEND_API_KEY && !env.EMAIL_FROM) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["EMAIL_FROM"],
+				message: 'required when RESEND_API_KEY is set, e.g. "nVestPadi <hello@yourdomain.com>"',
+			});
+		}
+		if (env.APP_MODE === "cloud" && env.NODE_ENV === "production" && !env.APP_URL) {
+			ctx.addIssue({ code: "custom", path: ["APP_URL"], message: "required in production cloud mode" });
+		}
 	});
+
+/** Variables from v2.0 that no longer do anything, with what replaced them. */
+const REMOVED_VARIABLES: Record<string, string> = {
+	API_KEY: "sign in with an account; create personal API tokens under Settings → API tokens",
+	TELEGRAM_CHAT_ID: "each user now sets their own Telegram chat ID under Settings → Notifications",
+	DISCORD_WEBHOOK_URL: "each user now sets their own Discord webhook under Settings → Notifications",
+};
 
 export class ConfigError extends Error {
 	constructor(public readonly issues: string[]) {
@@ -165,9 +209,16 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 				.filter(Boolean)
 		: DEFAULT_US_SYMBOLS;
 
+	const appUrl = (env.APP_URL ?? `http://localhost:${env.PORT}`).replace(/\/+$/, "");
+	const warnings = Object.entries(REMOVED_VARIABLES)
+		.filter(([key]) => cleaned[key])
+		.map(([key, instead]) => `${key} is no longer used — ${instead}.`);
+
 	return {
 		env: env.NODE_ENV,
+		mode: env.APP_MODE,
 		logLevel: env.LOG_LEVEL,
+		appUrl,
 		databasePath: env.DATABASE_PATH === ":memory:" ? env.DATABASE_PATH : path.resolve(env.DATABASE_PATH),
 		ai,
 		qdrant: env.QDRANT_URL
@@ -178,14 +229,15 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 				}
 			: null,
 		markets: { usSymbols },
-		server: { host: env.HOST, port: env.PORT, apiKey: env.API_KEY },
-		notifications: {
-			telegram:
-				env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
-					? { botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID }
-					: null,
-			discordWebhookUrl: env.DISCORD_WEBHOOK_URL ?? null,
-		},
+		server: { host: env.HOST, port: env.PORT, trustProxy: env.TRUST_PROXY },
+		auth: { allowSignup: env.ALLOW_SIGNUP ?? null, secureCookies: appUrl.startsWith("https://") },
+		email: env.RESEND_API_KEY && env.EMAIL_FROM ? { resendApiKey: env.RESEND_API_KEY, from: env.EMAIL_FROM } : null,
+		billing:
+			env.PAYSTACK_SECRET_KEY && env.PAYSTACK_PLAN_CODE
+				? { paystackSecretKey: env.PAYSTACK_SECRET_KEY, planCode: env.PAYSTACK_PLAN_CODE }
+				: null,
+		telegramBotToken: env.TELEGRAM_BOT_TOKEN ?? null,
+		warnings,
 	};
 }
 
