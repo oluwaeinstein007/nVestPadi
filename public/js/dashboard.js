@@ -28,6 +28,12 @@ const state = {
 };
 
 const currency = () => (state.exchange === "NGX" ? "₦" : "$");
+const curOf = (c) => (c === "NGN" ? "₦" : c === "USD" ? "$" : c ? `${c} ` : "");
+const isCrypto = () => state.exchange === "CRYPTO";
+/** NYSE / Nasdaq badge for US listings (other markets have a single venue). */
+const venue = (q) => (q.exchange === "US" && q.venue ? `<span class="venue">${esc(q.venue)}</span>` : "");
+/** Chart windows in sessions; crypto trades 7 days a week, so a year is 365 bars. */
+const RANGES = { "1M": 21, "3M": 63, "6M": 126, "1Y": 252, "2Y": 520 };
 
 // ---------------------------------------------------------------------------
 // Market overview
@@ -36,8 +42,10 @@ const currency = () => (state.exchange === "NGX" ? "₦" : "$");
 async function loadMarket() {
 	const m = await api(`/api/market?exchange=${state.exchange}&top=8`);
 	state.market = m;
-	$("#session").textContent = m.date ? `Session ${m.date}` : "";
-	$("#session").title = "End-of-day data for the latest trading session";
+	$("#session").textContent = m.date ? (isCrypto() ? `24h · ${m.date}` : `Session ${m.date}`) : "";
+	$("#session").title = isCrypto()
+		? "Rolling 24-hour change, updated with every sync"
+		: "End-of-day data for the latest trading session";
 
 	const total = m.count || 1;
 	const [up, flat, down] = $$("#breadth-bar span");
@@ -48,7 +56,12 @@ async function loadMarket() {
 	$("#unch").textContent = `■ ${m.unchanged}`;
 	$("#dec").textContent = `▼ ${m.decliners}`;
 	$("#value").textContent = m.count ? `${currency()}${fmtCompact(m.totalValue)}` : "—";
-	$("#volume").textContent = m.count ? `${fmtCompact(m.totalVolume)} shares` : "";
+	$("#value-label").textContent = isCrypto() ? "24h volume" : "Value traded";
+	$("#volume").textContent = m.count
+		? isCrypto()
+			? `${m.count} coins tracked`
+			: `${fmtCompact(m.totalVolume)} shares`
+		: "";
 
 	const traded = m.sectors.filter((s) => s.advancers + s.decliners > 0);
 	const best = traded[0];
@@ -70,17 +83,46 @@ function emptyMarket() {
 }
 
 function renderMovers() {
+	const box = $("#movers");
+	if (state.movers === "heatmap") return renderHeatmap(box);
+	box.className = "movers";
 	const list = state.market?.[state.movers] ?? [];
-	$("#movers").innerHTML = list.length
+	box.innerHTML = list.length
 		? list
 				.map(
 					(q) => `<li><button type="button" data-open="${esc(q.exchange)}:${esc(q.symbol)}">
-						<b>${esc(q.symbol)}</b>${chg(q.changePct)}
-						<span class="name">${esc(q.name)} · ${fmtPrice(q.close)}</span>
+						<b>${esc(q.symbol)}${venue(q)}</b>${chg(q.changePct)}
+						<span class="name">${esc(q.name)} · ${currency()}${fmtPrice(q.close)}</span>
 					</button></li>`,
 				)
 				.join("")
 		: `<li style="grid-column:1/-1">${emptyMarket()}</li>`;
+}
+
+/** Most-traded names as tiles sized by traded value and coloured by the day's move. */
+async function renderHeatmap(box) {
+	box.className = "heatmap";
+	box.innerHTML = '<li class="skeleton" style="grid-column:1/-1;height:160px"></li>';
+	const rows = await api(`/api/screen?exchange=${state.exchange}&sort=active&limit=40`).catch(() => []);
+	if (state.movers !== "heatmap") return;
+	if (!rows.length) {
+		box.innerHTML = `<li style="grid-column:1/-1">${emptyMarket()}</li>`;
+		return;
+	}
+	const maxValue = Math.max(...rows.map((r) => r.tradedValue || 0), 1);
+	box.innerHTML = rows
+		.map((r) => {
+			const c = r.changePct ?? 0;
+			const strength = Math.min(1, Math.abs(c) / 5);
+			const tone = c > 0 ? "up" : c < 0 ? "down" : "flat";
+			// Bigger tiles for the most traded names: span 1–3 columns.
+			const span = 1 + Math.round(((r.tradedValue || 0) / maxValue) * 2);
+			return `<li style="grid-column:span ${span};--s:${(0.15 + strength * 0.85).toFixed(2)}" class="tile ${tone}">
+				<button type="button" data-open="${esc(r.exchange)}:${esc(r.symbol)}" title="${esc(r.name)}">
+					<b>${esc(r.symbol)}</b><span>${c > 0 ? "+" : ""}${c.toFixed(2)}%</span>
+				</button></li>`;
+		})
+		.join("");
 }
 
 function renderSectors() {
@@ -114,22 +156,25 @@ async function loadScreen() {
 	for (const [k, v] of form) if (v) params.set(k, v);
 	const rows = await api(`/api/screen?${params}`);
 	const showRsi = rows.some((r) => r.rsi14 != null);
+	const showCap = rows.some((r) => r.marketCap != null);
 	$("#rsi-col").hidden = !showRsi;
+	$("#mcap-col").hidden = !showCap;
 	$("#screen-count").textContent = `${rows.length} result${rows.length === 1 ? "" : "s"}`;
 	$("#screen-body").innerHTML = rows.length
 		? rows
 				.map(
 					(r) => `<tr tabindex="0" data-open="${esc(r.exchange)}:${esc(r.symbol)}">
-						<td class="sym"><b>${esc(r.symbol)}</b><span>${esc(r.name)}</span></td>
+						<td class="sym"><b>${esc(r.symbol)}${venue(r)}</b><span>${esc(r.name)}</span></td>
 						<td class="hide-sm muted">${esc(r.sector ?? "")}</td>
 						<td class="num">${fmtPrice(r.close)}</td>
 						<td class="num">${chg(r.changePct)}</td>
 						<td class="num hide-sm">${fmtCompact(r.tradedValue)}</td>
+						${showCap ? `<td class="num hide-sm">${fmtCompact(r.marketCap)}</td>` : ""}
 						${showRsi ? `<td class="num">${r.rsi14 ?? "—"}</td>` : ""}
 					</tr>`,
 				)
 				.join("")
-		: `<tr><td colspan="6">${state.market?.count ? '<div class="empty">No stocks match these filters.</div>' : emptyMarket()}</td></tr>`;
+		: `<tr><td colspan="7">${state.market?.count ? '<div class="empty">Nothing matches these filters.</div>' : emptyMarket()}</td></tr>`;
 }
 
 let lastFocus = null;
@@ -183,10 +228,12 @@ function renderSecurity({ report: r, history, watched }) {
 	const ind = (label, value, note, extra = "") =>
 		`<div class="ind"><span>${label}</span><b>${value}</b>${note ? `<small>${note}</small>` : ""}${extra}</div>`;
 
+	const meta = [s.exchange === "US" ? s.venue : s.exchange, s.symbol, s.sector, s.industry].filter(Boolean);
 	$("#drawer-body").innerHTML = `
 		<div class="d-head">
-			<p class="muted small">${esc(s.exchange)} · ${esc(s.symbol)}${s.sector ? ` · ${esc(s.sector)}` : ""}</p>
+			<p class="muted small">${meta.map(esc).join(" · ")}</p>
 			<h2 id="drawer-title">${esc(s.name)}</h2>
+			${s.marketCap ? `<p class="muted small">Market cap ${cur}${fmtCompact(s.marketCap)}</p>` : ""}
 		</div>
 		<div class="d-price">
 			<span class="big">${cur}${fmtPrice(r.latest.close)}</span>${chg(r.latest.changePct)}
@@ -196,8 +243,12 @@ function renderSecurity({ report: r, history, watched }) {
 		<div class="d-actions">
 			<button class="btn" type="button" id="d-watch">${watched ? "★ Watching" : "☆ Add to watchlist"}</button>
 			<button class="btn" type="button" id="d-alert">🔔 Alert</button>
+			<button class="btn" type="button" id="d-hold">+ Portfolio</button>
 			<button class="btn" type="button" id="d-ask">Ask AI about ${esc(s.symbol)}</button>
 		</div>
+		<div class="tabs ranges" role="tablist" aria-label="Chart range">${Object.keys(RANGES)
+			.map((k) => `<button role="tab" type="button" data-range="${k}" aria-selected="${k === "1Y"}">${k}</button>`)
+			.join("")}</div>
 		<div class="chart-wrap" id="chart"></div>
 		<div class="legend"><span><i style="background:var(--${(history.at(-1)?.close ?? 0) >= (history[0]?.close ?? 0) ? "up" : "down"})"></i>Close</span><span><i style="background:var(--chart-1)"></i>SMA 20</span><span><i style="background:var(--chart-2)"></i>SMA 50</span></div>
 		<div class="perf">${perf}</div>
@@ -216,7 +267,24 @@ function renderSecurity({ report: r, history, watched }) {
 		<ul class="highlights">${r.highlights.map((h) => `<li>${esc(h)}</li>`).join("")}</ul>
 		<p class="muted small" style="margin-top:16px">Educational analysis based on ${r.bars} sessions. Not investment advice.</p>`;
 
-	renderChart($("#chart"), history);
+	const drawRange = (key) => {
+		for (const b of $$("[data-range]")) b.setAttribute("aria-selected", String(b.dataset.range === key));
+		// Crypto trades daily: scale session counts to calendar days.
+		const bars = s.exchange === "CRYPTO" ? Math.round((RANGES[key] * 365) / 252) : RANGES[key];
+		renderChart($("#chart"), history.slice(-bars));
+	};
+	for (const b of $$("[data-range]")) b.addEventListener("click", () => drawRange(b.dataset.range));
+	drawRange("1Y");
+
+	$("#d-hold").addEventListener("click", () => {
+		closeDrawer();
+		const form = $("#portfolio-form");
+		form.symbol.value = s.symbol;
+		form.dataset.exchange = s.exchange;
+		form.avgCost.value = r.latest.close;
+		form.quantity.focus();
+		form.scrollIntoView({ behavior: "smooth", block: "center" });
+	});
 
 	$("#d-watch").addEventListener("click", async (e) => {
 		try {
@@ -264,6 +332,7 @@ async function loadWatchlist() {
 						<div class="meta"><b>${esc(w.symbol)}</b><span>${esc(w.quote?.name ?? w.exchange)}</span></div>
 						${sparkSvg(w.spark)}
 						<div class="right"><div>${fmtPrice(w.quote?.close)}</div>${chg(w.quote?.changePct)}</div>
+						<button class="link unwatch" type="button" data-unwatch="${esc(w.exchange)}:${esc(w.symbol)}" aria-label="Remove ${esc(w.symbol)} from watchlist">✕</button>
 					</li>`,
 				)
 				.join("")
@@ -293,12 +362,43 @@ async function loadAlerts() {
 }
 
 // ---------------------------------------------------------------------------
+// Portfolio
+// ---------------------------------------------------------------------------
+
+async function loadPortfolio() {
+	const { positions, totals } = await api("/api/portfolio");
+	$("#holding-count").textContent = quotaLabel(positions.length, state.account?.limits.holdings);
+	$("#portfolio-totals").innerHTML = totals
+		.map(
+			(t) => `<div class="pf-total">
+				<span class="muted small">${esc(t.currency)} portfolio</span>
+				<b>${curOf(t.currency)}${fmtPrice(t.value)}</b>
+				<span class="small">Today <span class="${t.dayPnl >= 0 ? "up" : "down"}">${t.dayPnl >= 0 ? "+" : "−"}${curOf(t.currency)}${fmtPrice(Math.abs(t.dayPnl))}</span>
+				· Total ${chg(t.pnlPct)}</span>
+			</div>`,
+		)
+		.join("");
+	$("#portfolio").innerHTML = positions.length
+		? positions
+				.map(
+					(p) => `<li data-open="${esc(p.exchange)}:${esc(p.symbol)}" tabindex="0">
+						<div class="meta"><b>${esc(p.symbol)}</b><span>${p.quantity} × ${curOf(p.currency)}${fmtPrice(p.avgCost)}</span></div>
+						<div class="right"><div>${curOf(p.currency)}${fmtPrice(p.value ?? p.cost)}</div>${chg(p.pnlPct)}</div>
+						<button class="link" type="button" data-remove-holding="${p.id}" aria-label="Remove ${esc(p.symbol)} from portfolio">✕</button>
+					</li>`,
+				)
+				.join("")
+		: '<li class="empty">Track what you own: add a position below to see live value and P&amp;L.</li>';
+}
+
+// ---------------------------------------------------------------------------
 // Ask
 // ---------------------------------------------------------------------------
 
 const SUGGESTIONS = {
 	NGX: ["How did banks do today?", "Which sectors are leading?", "Biggest losers this session"],
 	US: ["How is big tech trading?", "Which stocks are oversold?", "Top movers today"],
+	CRYPTO: ["How is Bitcoin trending?", "Which coins rallied today?", "Is Ethereum overbought?"],
 };
 
 function renderSuggestions() {
@@ -433,7 +533,7 @@ async function refreshAccount() {
 }
 
 async function refreshAll() {
-	const results = await Promise.allSettled([loadMarket(), loadWatchlist(), loadAlerts()]);
+	const results = await Promise.allSettled([loadMarket(), loadWatchlist(), loadAlerts(), loadPortfolio()]);
 	await loadScreen().catch(() => undefined);
 	const failed = results.find((r) => r.status === "rejected");
 	if (failed && failed.reason.status !== 401) toastError(failed.reason);
@@ -498,6 +598,52 @@ function wireEvents() {
 			renderMovers();
 		});
 	}
+
+	// Inline remove buttons sit inside clickable rows, so handle them first.
+	document.addEventListener(
+		"click",
+		async (e) => {
+			const unwatch = e.target.closest("[data-unwatch]")?.dataset.unwatch;
+			const holding = e.target.closest("[data-remove-holding]")?.dataset.removeHolding;
+			if (!unwatch && !holding) return;
+			e.stopPropagation();
+			try {
+				if (unwatch) {
+					const [ex, sym] = unwatch.split(":");
+					await api(`/api/watchlist/${ex}/${encodeURIComponent(sym)}`, { method: "DELETE" });
+					loadWatchlist();
+				} else if (confirm("Remove this position from your portfolio?")) {
+					await api(`/api/portfolio/${holding}`, { method: "DELETE" });
+					loadPortfolio();
+				}
+			} catch (err) {
+				toastError(err);
+			}
+		},
+		true,
+	);
+
+	$("#portfolio-form").addEventListener("submit", async (e) => {
+		e.preventDefault();
+		const f = e.target;
+		try {
+			await api("/api/portfolio", {
+				method: "POST",
+				body: {
+					symbol: f.symbol.value.trim(),
+					exchange: f.dataset.exchange || undefined,
+					quantity: Number(f.quantity.value),
+					avgCost: Number(f.avgCost.value),
+				},
+			});
+			f.reset();
+			delete f.dataset.exchange;
+			toast("Position saved");
+			loadPortfolio();
+		} catch (err) {
+			toastError(err);
+		}
+	});
 
 	// Any element with data-open="EXCHANGE:SYMBOL" opens the detail drawer.
 	document.addEventListener("click", (e) => {
@@ -595,7 +741,7 @@ async function init() {
 		toast(`Welcome, ${state.account.user.name.split(" ")[0]}! Open any stock to see its full report.`);
 		history.replaceState(null, "", location.pathname + location.hash);
 	}
-	const deepLink = /^#(NGX|US):([\w.-]+)$/.exec(location.hash);
+	const deepLink = /^#(NGX|US|CRYPTO):([\w.-]+)$/.exec(location.hash);
 	if (deepLink) openSecurity(deepLink[1], deepLink[2]);
 }
 

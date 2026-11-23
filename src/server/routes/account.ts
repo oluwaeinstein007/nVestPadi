@@ -1,10 +1,10 @@
 /** The signed-in user's own account: profile, notifications, onboarding, security and API tokens. */
 import { z } from "zod";
 import type { App } from "../../app.js";
+import { rateLimiter } from "../../lib/rateLimit.js";
 import { toPublicUser } from "../../services/accountService.js";
 import { SESSION_TTL_SECONDS } from "../../services/authService.js";
 import { sessionCookie } from "../http.js";
-import { rateLimiter } from "../rateLimit.js";
 import type { Router } from "../router.js";
 import { exchangeSchema } from "./shared.js";
 
@@ -25,7 +25,7 @@ export function accountRoutes(r: Router, app: App) {
 		const b = z
 			.object({
 				emailAlerts: z.boolean().optional(),
-				telegramChatId: z.string().max(40).nullable().optional(),
+				dailyDigest: z.boolean().optional(),
 				discordWebhookUrl: z.string().max(300).nullable().optional(),
 			})
 			.parse(ctx.body);
@@ -40,6 +40,13 @@ export function accountRoutes(r: Router, app: App) {
 			limit: tests,
 		},
 	);
+
+	// Telegram is linked by opening a one-time t.me deep link, never by typing a chat id.
+	r.post("/api/account/telegram/link", async (ctx) => ({ url: await app.bots.telegramLink(ctx.user) }));
+	r.delete("/api/account/telegram", (ctx) => {
+		app.db.users.update(ctx.user.id, { telegramChatId: null });
+		return { linked: false };
+	});
 
 	r.post("/api/account/onboarding", (ctx) => {
 		const b = z

@@ -130,4 +130,35 @@ export const MIGRATIONS: string[] = [
 	ALTER TABLE alerts ADD COLUMN user_id INTEGER REFERENCES users (id) ON DELETE CASCADE;
 	CREATE INDEX idx_alerts_active ON alerts (triggered_at, user_id);
 	`,
+
+	// 3 — v3.1: listing metadata, crypto ids, portfolios, digests, Telegram linking, job bookkeeping
+	`
+	ALTER TABLE securities ADD COLUMN venue TEXT;
+	ALTER TABLE securities ADD COLUMN industry TEXT;
+	ALTER TABLE securities ADD COLUMN market_cap REAL;
+	ALTER TABLE securities ADD COLUMN source_id TEXT;
+
+	ALTER TABLE users ADD COLUMN daily_digest INTEGER NOT NULL DEFAULT 1;
+	ALTER TABLE users ADD COLUMN last_digest_on TEXT;
+
+	CREATE TABLE holdings (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+		exchange   TEXT NOT NULL,
+		symbol     TEXT NOT NULL,
+		quantity   REAL NOT NULL CHECK (quantity > 0),
+		avg_cost   REAL NOT NULL CHECK (avg_cost >= 0),
+		note       TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE (user_id, exchange, symbol)
+	);
+
+	-- Small key/value store for idempotent jobs (e.g. "digest:NGX:2026-11-24" = sent).
+	CREATE TABLE job_state (
+		key        TEXT PRIMARY KEY,
+		value      TEXT,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	`,
 ];

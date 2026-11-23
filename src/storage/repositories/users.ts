@@ -22,6 +22,9 @@ export interface User {
 	discordWebhookUrl: string | null;
 	billingCustomerId: string | null;
 	billingSubscriptionId: string | null;
+	/** Receive a daily wrap-up of their watchlist and portfolio after their market closes. */
+	dailyDigest: boolean;
+	lastDigestOn: string | null;
 	createdAt: string;
 	lastLoginAt: string | null;
 }
@@ -41,6 +44,8 @@ const UPDATABLE = {
 	discordWebhookUrl: "discord_webhook_url",
 	billingCustomerId: "billing_customer_id",
 	billingSubscriptionId: "billing_subscription_id",
+	dailyDigest: "daily_digest",
+	lastDigestOn: "last_digest_on",
 } as const satisfies Partial<Record<keyof User, string>>;
 export type UserPatch = Partial<Pick<User, keyof typeof UPDATABLE>>;
 
@@ -61,7 +66,7 @@ export interface ApiTokenInfo {
 	lastUsedAt: string | null;
 }
 
-export type AuthTokenPurpose = "verify-email" | "reset-password";
+export type AuthTokenPurpose = "verify-email" | "reset-password" | "telegram-link";
 
 /** Accounts, sessions, one-time auth tokens and personal API tokens. All secrets are stored hashed. */
 export class UserRepository {
@@ -122,6 +127,23 @@ export class UserRepository {
 		const row = this.db.prepare("SELECT * FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get() as
 			| Row
 			| undefined;
+		return row ? toUser(row) : null;
+	}
+
+	/** Users who want a daily digest and whose default market is `exchange`, not yet sent `day`. */
+	digestRecipients(exchange: Exchange, day: string): User[] {
+		return (
+			this.db
+				.prepare(
+					`SELECT * FROM users WHERE daily_digest = 1 AND default_exchange = ?
+					 AND (last_digest_on IS NULL OR last_digest_on < ?) ORDER BY id`,
+				)
+				.all(exchange, day) as Row[]
+		).map(toUser);
+	}
+
+	byTelegramChat(chatId: string): User | null {
+		const row = this.db.prepare("SELECT * FROM users WHERE telegram_chat_id = ?").get(chatId) as Row | undefined;
 		return row ? toUser(row) : null;
 	}
 
@@ -293,6 +315,8 @@ function toUser(r: Row): User {
 		discordWebhookUrl: str(r.discord_webhook_url),
 		billingCustomerId: str(r.billing_customer_id),
 		billingSubscriptionId: str(r.billing_subscription_id),
+		dailyDigest: Boolean(r.daily_digest),
+		lastDigestOn: str(r.last_digest_on),
 		createdAt: String(r.created_at),
 		lastLoginAt: str(r.last_login_at),
 	};

@@ -63,6 +63,10 @@ function renderChannels() {
 					: `We sent a confirmation link to ${esc(account.user.email)} — click it to turn email alerts on.`
 		}</span></div>`;
 	$("#telegram-field").hidden = !n.telegramAvailable;
+	if (n.telegramLinked) {
+		$("#telegram-note").textContent = "Connected ✓";
+		$("#telegram-connect").hidden = true;
+	}
 	const limit = account.limits.watchlist;
 	$("#watch-limit").textContent = limit == null ? "" : `Your plan includes ${limit}.`;
 }
@@ -72,9 +76,8 @@ async function finish(skipped) {
 	error.hidden = true;
 	$("#next").disabled = true;
 	try {
-		const telegram = form.telegramChatId.value.trim();
-		if (!skipped && telegram) {
-			await api("/api/account/notifications", { method: "PUT", body: { telegramChatId: telegram } });
+		if (!skipped) {
+			await api("/api/account/notifications", { method: "PUT", body: { dailyDigest: form.dailyDigest.checked } });
 		}
 		await api("/api/account/onboarding", {
 			method: "POST",
@@ -115,6 +118,15 @@ async function init() {
 	$("#pick-search").addEventListener("input", (e) => search(e.target.value.trim()));
 	form.addEventListener("change", (e) => {
 		if (e.target.name === "exchange") picked.clear();
+	});
+	$("#telegram-connect").addEventListener("click", async () => {
+		try {
+			const { url } = await api("/api/account/telegram/link", { method: "POST" });
+			window.open(url, "_blank", "noopener");
+			$("#telegram-note").textContent = "Tap Start in Telegram — we'll take it from there.";
+		} catch (err) {
+			$("#telegram-note").textContent = err.message;
+		}
 	});
 	$("#back").addEventListener("click", () => show(step - 1));
 	$("#skip").addEventListener("click", () => finish(true));

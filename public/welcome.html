@@ -36,7 +36,11 @@
 						</label>
 						<label class="choice">
 							<input type="radio" name="exchange" value="US" />
-							<span><b>🇺🇸 US equities</b><small>Large-cap US stocks via Yahoo Finance</small></span>
+							<span><b>🇺🇸 US stocks</b><small>NYSE and Nasdaq large caps</small></span>
+						</label>
+						<label class="choice">
+							<input type="radio" name="exchange" value="CRYPTO" />
+							<span><b>₿ Crypto</b><small>Top 100 coins by market cap</small></span>
 						</label>
 					</div>
 				</section>
@@ -52,11 +56,12 @@
 					<h1>Where should alerts go?</h1>
 					<p class="muted">We check your alerts after every market sync and send one message when something triggers.</p>
 					<div class="channel" id="email-channel"></div>
-					<label class="auth-field" id="telegram-field" hidden>
-						<span>Telegram chat ID <small class="muted">(optional)</small></span>
-						<input name="telegramChatId" inputmode="numeric" placeholder="e.g. 123456789" autocomplete="off" />
-						<small class="muted">Message the server's bot, then get your ID from @userinfobot.</small>
-					</label>
+					<div class="channel" id="telegram-field" hidden>
+						<span class="channel-icon" aria-hidden="true">✈</span>
+						<div style="flex:1"><b>Telegram</b> <small class="muted">(optional)</small><br><span class="muted small" id="telegram-note">Get alerts and a daily digest in a chat with our bot.</span></div>
+						<button class="btn btn-ghost" type="button" id="telegram-connect">Connect</button>
+					</div>
+					<label class="auth-check"><input type="checkbox" name="dailyDigest" checked /><span>Send me a daily digest of my watchlist and portfolio after the market closes.</span></label>
 				</section>
 
 				<p class="auth-error" role="alert" hidden></p>

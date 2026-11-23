@@ -4,17 +4,22 @@
  */
 import { type AIProvider, createAIProvider } from "./ai/provider.js";
 import type { Config } from "./config.js";
+import { TelegramClient } from "./integrations/telegram.js";
 import { errorMessage, logger } from "./lib/logger.js";
+import { CoinGecko } from "./markets/coingecko.js";
 import type { Exchange } from "./markets/types.js";
 import { AccountService } from "./services/accountService.js";
 import { AlertService, type TriggeredAlert } from "./services/alertService.js";
 import { AuthService } from "./services/authService.js";
 import { BillingService } from "./services/billingService.js";
+import { BotService } from "./services/botService.js";
+import { DigestService } from "./services/digestService.js";
 import { InsightService } from "./services/insightService.js";
 import { KnowledgeBase } from "./services/knowledgeBase.js";
 import { type Mailer, createMailer } from "./services/mailer.js";
 import { MarketService, type SyncResult } from "./services/marketService.js";
 import { Notifier } from "./services/notifier.js";
+import { PortfolioService } from "./services/portfolioService.js";
 import { WatchlistService } from "./services/watchlistService.js";
 import { Database } from "./storage/database.js";
 import { VectorStore } from "./storage/vectorStore.js";
@@ -34,6 +39,11 @@ export interface App {
 	auth: AuthService;
 	accounts: AccountService;
 	billing: BillingService;
+	portfolio: PortfolioService;
+	digests: DigestService;
+	bots: BotService;
+	/** Server-wide Telegram bot, when TELEGRAM_BOT_TOKEN is set. */
+	telegram: TelegramClient | null;
 	/** Sync one or more exchanges, then evaluate alerts. Partial failures are reported, not thrown. */
 	syncAndAlert(
 		exchanges: Exchange[],
@@ -55,18 +65,29 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 	const vectors = config.qdrant ? new VectorStore(config.qdrant) : null;
 	const mailer = overrides.mailer ?? createMailer(config.email);
 	const kb = new KnowledgeBase(db, ai, vectors);
-	const market = new MarketService(db, kb, config.markets.usSymbols);
+	const market = new MarketService(db, kb, {
+		usSymbols: config.markets.usSymbols,
+		coingecko: new CoinGecko(config.coingeckoApiKey),
+	});
+	const telegram = config.telegram ? new TelegramClient(config.telegram.botToken) : null;
 	const insights = new InsightService(db, ai, kb, market);
-	const notifier = new Notifier(mailer, config.telegramBotToken, config.mode, config.appUrl);
+	const notifier = new Notifier(mailer, telegram, config.mode, config.appUrl);
 	const alerts = new AlertService(db, notifier, config.mode);
 	const watchlists = new WatchlistService(db, market, config.mode);
 	const auth = new AuthService(db, mailer, config);
 	const accounts = new AccountService(db, auth, notifier, watchlists, config.mode);
 	const billing = new BillingService(db, config.billing, config.appUrl, config.mode);
+	const portfolio = new PortfolioService(db, market, config.mode);
+	const digests = new DigestService(db, notifier, watchlists, portfolio, {
+		telegram,
+		telegramChatId: config.telegram?.broadcastChatId ?? null,
+		discordWebhookUrl: config.discord.broadcastWebhookUrl,
+		appUrl: config.appUrl,
+	});
 
 	for (const warning of config.warnings) logger.warn(warning);
 
-	return {
+	const app: App = {
 		config,
 		db,
 		ai,
@@ -81,6 +102,11 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 		auth,
 		accounts,
 		billing,
+		portfolio,
+		digests,
+		telegram,
+		// Assigned below: the bot needs the finished app.
+		bots: undefined as unknown as BotService,
 
 		async syncAndAlert(exchanges, options = {}) {
 			const results: SyncResult[] = [];
@@ -170,12 +196,42 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 				}
 			}
 
+			if (!telegram) {
+				checks.push({
+					name: "Telegram",
+					status: "off",
+					detail: "Set TELEGRAM_BOT_TOKEN to offer a bot, alerts and digests",
+				});
+			} else {
+				try {
+					const username = await telegram.botUsername();
+					checks.push({
+						name: "Telegram",
+						status: "ok",
+						detail: `@${username} · ${config.telegram?.webhookSecret && config.auth.secureCookies ? "webhook" : "polling"}${config.telegram?.broadcastChatId ? ` · digests → ${config.telegram.broadcastChatId}` : " · no broadcast chat (TELEGRAM_CHAT_ID)"}`,
+					});
+				} catch (err) {
+					checks.push({ name: "Telegram", status: "error", detail: errorMessage(err) });
+				}
+			}
 			checks.push({
-				name: "Telegram",
-				status: config.telegramBotToken ? "ok" : "off",
-				detail: config.telegramBotToken
-					? "Bot configured — users add their chat ID in Settings"
-					: "Set TELEGRAM_BOT_TOKEN to offer Telegram alerts",
+				name: "Discord",
+				status: config.discord.app || config.discord.broadcastWebhookUrl ? "ok" : "off",
+				detail:
+					[
+						config.discord.broadcastWebhookUrl && "digests → channel webhook",
+						config.discord.app && `slash commands at ${config.appUrl}/api/integrations/discord`,
+					]
+						.filter(Boolean)
+						.join(" · ") ||
+					"Set DISCORD_WEBHOOK_URL for digests, DISCORD_APPLICATION_ID + DISCORD_PUBLIC_KEY for slash commands",
+			});
+			checks.push({
+				name: "Digests",
+				status: config.digests ? "ok" : "off",
+				detail: config.digests
+					? "Daily market + personal digests (NGX 15:00, US 21:30, crypto 07:00 UTC) while `serve` runs"
+					: "DAILY_DIGEST=false",
 			});
 
 			if (config.mode === "cloud") {
@@ -203,4 +259,6 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 			db.close();
 		},
 	};
+	app.bots = new BotService(app);
+	return app;
 }

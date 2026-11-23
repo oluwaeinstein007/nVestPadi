@@ -11,6 +11,7 @@ import { createMailer } from "../src/services/mailer.js";
 import { MarketService } from "../src/services/marketService.js";
 import { Notifier } from "../src/services/notifier.js";
 import { makeBars, memoryDb, security, seed, user } from "./helpers.js";
+import { marketOptions } from "./helpers.js";
 
 const up = Array.from({ length: 80 }, (_, i) => 100 + i);
 const down = Array.from({ length: 80 }, (_, i) => 200 - i);
@@ -162,7 +163,7 @@ describe("symbol detection for AI answers", () => {
 	it("finds tickers and company names but not English words", () => {
 		const db = fixture();
 		const kb = new KnowledgeBase(db, null, null);
-		const insights = new InsightService(db, null, kb, new MarketService(db, kb, []));
+		const insights = new InsightService(db, null, kb, new MarketService(db, kb, marketOptions));
 		const found = (q: string) =>
 			insights
 				.detectSymbols(q)

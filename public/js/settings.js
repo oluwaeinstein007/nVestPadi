@@ -38,7 +38,7 @@ function renderNotifications() {
 	const n = account.notifications;
 	const f = $("#notify-form");
 	f.emailAlerts.checked = n.emailAlerts;
-	f.telegramChatId.value = n.telegramChatId ?? "";
+	f.dailyDigest.checked = n.dailyDigest;
 	f.discordWebhookUrl.value = n.discordWebhookUrl ?? "";
 
 	$("#email-channel-note").textContent = !n.emailDelivers
@@ -47,8 +47,10 @@ function renderNotifications() {
 			? `to ${account.user.email}`
 			: "— confirm your email first";
 	$("#telegram-field").hidden = !n.telegramAvailable;
-	$("#telegram-help").innerHTML =
-		"Message the server's bot first, then get your ID from <b>@userinfobot</b> and paste it here.";
+	$("#telegram-status").textContent = n.telegramLinked ? "Connected" : "Not connected";
+	$("#telegram-status").className = `tag${n.telegramLinked ? " ok" : ""}`;
+	$("#telegram-connect").textContent = n.telegramLinked ? "Reconnect" : "Connect Telegram";
+	$("#telegram-disconnect").hidden = !n.telegramLinked;
 	const discordAllowed = account.limits.discordAlerts;
 	f.discordWebhookUrl.disabled = !discordAllowed;
 	$("#discord-tag").hidden = discordAllowed;
@@ -63,6 +65,7 @@ function planFeatures(p) {
 	const l = p.limits;
 	return [
 		`${l.watchlist} watchlist stocks`,
+		`${l.holdings} portfolio positions`,
 		`${l.activeAlerts} active alerts`,
 		`${l.aiQuestionsPerDay} AI questions a day`,
 		l.discordAlerts ? "Email, Telegram & Discord alerts" : "Email & Telegram alerts",
@@ -84,6 +87,7 @@ function renderPlan() {
 	$("#plan-name").dataset.plan = plan.id;
 	$("#meters").innerHTML = [
 		meter("Watchlist", usage.watchlist, limits.watchlist),
+		meter("Portfolio positions", usage.holdings, limits.holdings),
 		meter("Active alerts", usage.activeAlerts, limits.activeAlerts),
 		meter("AI questions today", usage.aiQuestionsToday, limits.aiQuestionsPerDay),
 	].join("");
@@ -257,7 +261,7 @@ async function init() {
 				method: "PUT",
 				body: {
 					emailAlerts: form.emailAlerts.checked,
-					telegramChatId: account.notifications.telegramAvailable ? data.get("telegramChatId") || null : undefined,
+					dailyDigest: form.dailyDigest.checked,
 					discordWebhookUrl: account.limits.discordAlerts ? data.get("discordWebhookUrl") || null : undefined,
 				},
 			});
@@ -265,6 +269,30 @@ async function init() {
 			toast("Delivery settings saved");
 		}),
 	);
+	$("#telegram-connect").addEventListener("click", async () => {
+		try {
+			const { url } = await api("/api/account/telegram/link", { method: "POST" });
+			window.open(url, "_blank", "noopener");
+			toast("Tap Start in Telegram, then come back here.");
+			// The link is made by the bot; poll briefly so the status updates on its own.
+			for (let i = 0; i < 20 && !account.notifications.telegramLinked; i++) {
+				await new Promise((r) => setTimeout(r, 3000));
+				await reload();
+			}
+		} catch (err) {
+			toastError(err);
+		}
+	});
+	$("#telegram-disconnect").addEventListener("click", async () => {
+		try {
+			await api("/api/account/telegram", { method: "DELETE" });
+			await reload();
+			toast("Telegram disconnected");
+		} catch (err) {
+			toastError(err);
+		}
+	});
+
 	$("#test-notify").addEventListener("click", async (e) => {
 		e.target.disabled = true;
 		try {

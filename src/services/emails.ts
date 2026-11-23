@@ -5,7 +5,14 @@ const esc = (s: string) =>
 	s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 
 function layout(title: string, paragraphs: string[], action?: { label: string; url: string }): string {
-	const body = paragraphs.map((p) => `<p style="margin:0 0 16px">${esc(p).replace(/\n/g, "<br>")}</p>`).join("");
+	const body = paragraphs
+		.map(
+			(p) =>
+				`<p style="margin:0 0 16px">${esc(p)
+					.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+					.replace(/\n/g, "<br>")}</p>`,
+		)
+		.join("");
 	const button = action
 		? `<p style="margin:24px 0"><a href="${esc(action.url)}" style="background:#0b7a4b;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;display:inline-block">${esc(action.label)}</a></p><p style="margin:0 0 16px;color:#5b6b64;font-size:13px">Or paste this link into your browser:<br><span style="word-break:break-all">${esc(action.url)}</span></p>`
 		: "";
@@ -65,6 +72,20 @@ export function testNotification(to: string, name: string, url: string): EmailMe
 		text: `Hi ${name}, this is a test. Your alerts will arrive here.\n\n${url}`,
 		html: layout("Test notification", [`Hi ${name}, this is a test. Your alerts will arrive here.`], {
 			label: "Open settings",
+			url,
+		}),
+	};
+}
+
+/** General update (e.g. the daily digest). `paragraphs` may use **bold**. */
+export function update(to: string, name: string, subject: string, paragraphs: string[], url: string): EmailMessage {
+	const plain = paragraphs.map((p) => p.replace(/\*\*/g, "")).join("\n\n");
+	return {
+		to,
+		subject: `${subject} — nVestPadi`,
+		text: `Hi ${name},\n\n${plain}\n\nOpen nVestPadi: ${url}\nManage digests: ${url}/settings#notifications`,
+		html: layout(subject, [`Hi ${name},`, ...paragraphs, "You can turn these off in Settings → Alert delivery."], {
+			label: "Open dashboard",
 			url,
 		}),
 	};

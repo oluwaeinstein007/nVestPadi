@@ -1,13 +1,21 @@
 /**
  * Market data orchestration: fetch from sources → persist to SQLite →
  * (optionally) index into the knowledge base.
+ *
+ * Sources per market:
+ * - NGX: NGX statistics API (daily board) + afx.kwayisi.org (names, ~10y closes)
+ * - US: Yahoo Finance (prices, venue) + Nasdaq screener (sector, industry, market cap)
+ * - CRYPTO: CoinGecko (top coins by market cap, daily history)
  */
 import { type SecurityReport, buildReport } from "../analysis/report.js";
 import { NotFoundError } from "../lib/errors.js";
 import { HttpError } from "../lib/http.js";
-import { logger } from "../lib/logger.js";
+import { errorMessage, logger } from "../lib/logger.js";
+import { isoDate, mapLimit } from "../lib/util.js";
+import type { CoinGecko } from "../markets/coingecko.js";
+import { fetchUsListings } from "../markets/nasdaq.js";
 import { fetchNgxHistory, fetchNgxSnapshot } from "../markets/ngx.js";
-import { EXCHANGES, type Exchange, type MarketSnapshot } from "../markets/types.js";
+import { EXCHANGES, type Exchange, type MarketSnapshot, type PriceBar } from "../markets/types.js";
 import { type YahooRange, fetchUsHistory, fetchUsSnapshot } from "../markets/yahoo.js";
 import type { Database } from "../storage/database.js";
 import type { KnowledgeBase } from "./knowledgeBase.js";
@@ -21,12 +29,15 @@ export interface SyncResult {
 	failed: string[];
 }
 
+/** Sessions needed before every indicator (incl. MACD and SMA 50) is meaningful. */
+export const MIN_HISTORY = 60;
+
 export class SymbolNotFoundError extends NotFoundError {
 	constructor(symbol: string, exchange?: Exchange) {
 		super(
 			exchange
 				? `${symbol} not found on ${exchange}.`
-				: `${symbol} not found on NGX or US. Check the ticker, or pass an exchange.`,
+				: `${symbol} not found on NGX, US or crypto. Check the ticker, or pick a market.`,
 		);
 	}
 }
@@ -35,7 +46,7 @@ export class MarketService {
 	constructor(
 		private readonly db: Database,
 		private readonly kb: KnowledgeBase,
-		private readonly usSymbols: string[],
+		private readonly options: { usSymbols: string[]; coingecko: CoinGecko },
 	) {}
 
 	private store(snapshot: MarketSnapshot) {
@@ -43,19 +54,22 @@ export class MarketService {
 		this.db.market.upsertPrices(snapshot.bars);
 	}
 
-	/** Fetch the latest session for an exchange and store it. */
+	/** Fetch the latest session for a market and store it. */
 	async sync(exchange: Exchange, options: { symbols?: string[]; index?: boolean } = {}): Promise<SyncResult> {
 		let snapshot: MarketSnapshot;
 		let failed: string[] = [];
 		if (exchange === "NGX") {
 			snapshot = await fetchNgxSnapshot();
+		} else if (exchange === "CRYPTO") {
+			snapshot = await this.options.coingecko.snapshot(100);
 		} else {
-			const symbols = options.symbols?.length ? options.symbols.map((s) => s.toUpperCase()) : this.usSymbols;
+			const symbols = options.symbols?.length ? options.symbols.map((s) => s.toUpperCase()) : this.options.usSymbols;
 			const result = await fetchUsSnapshot(symbols);
 			snapshot = result;
 			failed = result.failed;
 		}
 		this.store(snapshot);
+		if (exchange === "US") await this.enrichUsListings();
 
 		const date = snapshot.bars.reduce<string | null>((max, b) => (max === null || b.date > max ? b.date : max), null);
 		let indexed = 0;
@@ -67,19 +81,29 @@ export class MarketService {
 				indexed = (await this.kb.indexQuotes(latest)).indexed;
 			} catch (err) {
 				// Market data is already saved; indexing is a bonus that shouldn't fail the sync.
-				logger.warn("quote indexing failed; prices were still saved", {
-					error: err instanceof Error ? err.message : String(err),
-				});
+				logger.warn("quote indexing failed; prices were still saved", { error: errorMessage(err) });
 			}
 		}
-		return {
-			exchange,
-			securities: snapshot.securities.length,
-			bars: snapshot.bars.length,
-			date,
-			indexed,
-			failed,
-		};
+		return { exchange, securities: snapshot.securities.length, bars: snapshot.bars.length, date, indexed, failed };
+	}
+
+	/** Sector, industry, market cap and venue for US stocks — refreshed at most once a day. */
+	async enrichUsListings(force = false): Promise<number> {
+		const key = `enrich:US:${isoDate(new Date())}`;
+		if (!force && this.db.jobs.get(key)) return 0;
+		const listings = await fetchUsListings();
+		if (listings.size === 0) return 0;
+		const known = new Set(
+			this.db.market
+				.allSymbols()
+				.filter((s) => s.exchange === "US")
+				.map((s) => s.symbol),
+		);
+		const relevant = new Map([...listings].filter(([symbol]) => known.has(symbol)));
+		const updated = this.db.market.enrichSecurities("US", relevant);
+		this.db.jobs.set(key, String(updated));
+		logger.info("US listings enriched", { updated });
+		return updated;
 	}
 
 	/** Backfill daily history for one symbol. */
@@ -89,12 +113,12 @@ export class MarketService {
 		let unexpected: unknown;
 		for (const exchange of candidates) {
 			try {
-				const snapshot =
-					exchange === "NGX" ? await fetchNgxHistory(ticker) : await fetchUsHistory(ticker, options.range ?? "1y");
+				const snapshot = await this.fetchHistory(exchange, ticker, options.range);
 				if (snapshot.bars.length === 0) continue;
 				// Keep richer names/sectors from the daily sync if we already have them.
 				const known = this.db.market.getSecurity(exchange, ticker);
 				this.store({ securities: known ? [] : snapshot.securities, bars: snapshot.bars });
+				this.db.jobs.set(`history:${exchange}:${ticker}`, isoDate(new Date()));
 				return {
 					exchange,
 					symbol: ticker,
@@ -113,7 +137,46 @@ export class MarketService {
 		throw new SymbolNotFoundError(ticker, options.exchange);
 	}
 
-	/** Exchanges to try for a bare ticker: ones we already know it on first, then NGX, then US. */
+	private async fetchHistory(exchange: Exchange, ticker: string, range?: YahooRange): Promise<MarketSnapshot> {
+		if (exchange === "NGX") return fetchNgxHistory(ticker);
+		if (exchange === "US") return fetchUsHistory(ticker, range ?? "2y");
+		const known = this.db.market.getSecurity("CRYPTO", ticker);
+		const security = known?.sourceId ? known : await this.options.coingecko.search(ticker);
+		if (!security?.sourceId) throw new Error(`Unknown crypto symbol ${ticker}`);
+		const bars: PriceBar[] = await this.options.coingecko.history(security.sourceId, ticker);
+		return { securities: [security], bars };
+	}
+
+	/**
+	 * Fill in history for symbols that have too little to compute indicators
+	 * (e.g. NGX symbols seen in only a few daily syncs). Runs in the background
+	 * after syncs; each symbol is attempted at most once a day.
+	 */
+	async backfill(exchange: Exchange, options: { limit?: number; concurrency?: number } = {}): Promise<number> {
+		const today = isoDate(new Date());
+		const due = this.db.market
+			.thinHistory(exchange, MIN_HISTORY)
+			.filter((symbol) => this.db.jobs.get(`history:${exchange}:${symbol}`) !== today)
+			.slice(0, options.limit ?? 50);
+		if (due.length === 0) return 0;
+		// CoinGecko's keyless tier allows only a few calls a minute.
+		const concurrency = options.concurrency ?? (exchange === "CRYPTO" ? 1 : 3);
+		const loaded = await mapLimit(due, concurrency, async (symbol) => {
+			try {
+				await this.loadHistory(symbol, { exchange });
+				return true;
+			} catch (err) {
+				this.db.jobs.set(`history:${exchange}:${symbol}`, today);
+				logger.debug("backfill failed", { exchange, symbol, error: errorMessage(err) });
+				return false;
+			}
+		});
+		const count = loaded.filter(Boolean).length;
+		logger.info(`backfilled history for ${count}/${due.length} ${exchange} symbols`);
+		return count;
+	}
+
+	/** Markets to try for a bare ticker: ones we already know it on first, then NGX, US, crypto. */
 	private candidateExchanges(symbol: string): Exchange[] {
 		const known = this.db.market.findExchanges(symbol);
 		return [...known, ...EXCHANGES.filter((e) => !known.includes(e))];
@@ -121,7 +184,7 @@ export class MarketService {
 
 	/**
 	 * Make sure a symbol is known and has enough history for trends and alerts,
-	 * fetching it if needed. Used before adding it to a watchlist.
+	 * fetching it if needed. Used before adding it to a watchlist or portfolio.
 	 */
 	async track(symbol: string, exchange?: Exchange): Promise<{ exchange: Exchange; symbol: string }> {
 		let target: { exchange: Exchange; symbol: string };
@@ -131,11 +194,7 @@ export class MarketService {
 			const loaded = await this.loadHistory(symbol, { exchange });
 			target = { exchange: loaded.exchange, symbol: loaded.symbol };
 		}
-		if (this.db.market.history(target.exchange, target.symbol, 30).length < 10) {
-			await this.loadHistory(target.symbol, { exchange: target.exchange }).catch((err) =>
-				logger.warn("history backfill failed", { symbol: target.symbol, error: String(err) }),
-			);
-		}
+		await this.ensureHistory(target.exchange, target.symbol);
 		return target;
 	}
 
@@ -147,10 +206,19 @@ export class MarketService {
 		return { exchange: known[0] as Exchange, symbol: ticker };
 	}
 
-	/**
-	 * Technical report for a symbol. If we hold too little history, fetch more first
-	 * (one network round-trip, then cached in SQLite).
-	 */
+	/** Fetch deeper history when we hold too little — at most once a day per symbol. */
+	private async ensureHistory(exchange: Exchange, symbol: string): Promise<PriceBar[]> {
+		const bars = this.db.market.history(exchange, symbol);
+		if (bars.length >= MIN_HISTORY || this.db.jobs.get(`history:${exchange}:${symbol}`) === isoDate(new Date())) {
+			return bars;
+		}
+		await this.loadHistory(symbol, { exchange }).catch((err) =>
+			logger.warn("history backfill failed", { exchange, symbol, error: errorMessage(err) }),
+		);
+		return this.db.market.history(exchange, symbol);
+	}
+
+	/** Technical report for a symbol, backfilling history first if we hold too little. */
 	async report(symbol: string, exchange?: Exchange): Promise<SecurityReport> {
 		let target: { exchange: Exchange; symbol: string };
 		try {
@@ -159,16 +227,7 @@ export class MarketService {
 			const loaded = await this.loadHistory(symbol, { exchange });
 			target = { exchange: loaded.exchange, symbol: loaded.symbol };
 		}
-		let bars = this.db.market.history(target.exchange, target.symbol);
-		if (bars.length < 60 && target.exchange === "US") {
-			await this.loadHistory(target.symbol, { exchange: "US" }).catch((err) =>
-				logger.warn("history backfill failed", { symbol: target.symbol, error: String(err) }),
-			);
-			bars = this.db.market.history(target.exchange, target.symbol);
-		} else if (bars.length < 10 && target.exchange === "NGX") {
-			await this.loadHistory(target.symbol, { exchange: "NGX" }).catch(() => undefined);
-			bars = this.db.market.history(target.exchange, target.symbol);
-		}
+		const bars = await this.ensureHistory(target.exchange, target.symbol);
 		const security = this.db.market.getSecurity(target.exchange, target.symbol);
 		if (!security || bars.length === 0) throw new SymbolNotFoundError(target.symbol, target.exchange);
 		return buildReport(security, bars);
@@ -177,5 +236,5 @@ export class MarketService {
 
 function isNotFound(err: unknown): boolean {
 	if (err instanceof HttpError) return err.status === 404;
-	return err instanceof Error && /not found|unknown us symbol|no .*(data|history)/i.test(err.message);
+	return err instanceof Error && /not found|unknown (us|crypto) symbol|no .*(data|history)/i.test(err.message);
 }

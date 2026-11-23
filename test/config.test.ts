@@ -24,10 +24,25 @@ describe("config", () => {
 		assert.equal(c.auth.secureCookies, true);
 	});
 
-	it("warns about variables that v3 no longer reads", () => {
-		const c = parseConfig({ API_KEY: "old", TELEGRAM_CHAT_ID: "1" });
-		assert.equal(c.warnings.length, 2);
+	it("warns about variables that are no longer read", () => {
+		const c = parseConfig({ API_KEY: "old" });
+		assert.equal(c.warnings.length, 1);
 		assert.match(c.warnings[0] ?? "", /API_KEY is no longer used/);
+	});
+
+	it("configures server-wide bots and broadcast channels", () => {
+		const c = parseConfig({
+			TELEGRAM_BOT_TOKEN: "123:abc",
+			TELEGRAM_CHAT_ID: "-100123",
+			DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/1/x",
+			DISCORD_APPLICATION_ID: "123",
+			DISCORD_PUBLIC_KEY: "a".repeat(64),
+		});
+		assert.deepEqual(c.telegram, { botToken: "123:abc", broadcastChatId: "-100123", webhookSecret: null });
+		assert.equal(c.discord.app?.applicationId, "123");
+		assert.equal(c.digests, true);
+		assert.throws(() => parseConfig({ TELEGRAM_CHAT_ID: "-100123" }), ConfigError);
+		assert.throws(() => parseConfig({ DISCORD_APPLICATION_ID: "123" }), ConfigError);
 	});
 
 	it("treats blank values as unset", () => {

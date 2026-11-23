@@ -3,15 +3,16 @@
  *
  * - Daily snapshot: NGX's public equities statistics API (full OHLC, volume,
  *   trades, value, sector for every listed equity).
- * - Company names + recent history: afx.kwayisi.org (best-effort; history is
- *   the last ~10 sessions, close and volume only). Longer NGX history builds up
- *   in the local database as `nvest sync` runs each trading day.
+ * - Company names and history: afx.kwayisi.org. Its chart script embeds about
+ *   ten years of daily closes per symbol, which is enough for every indicator;
+ *   the HTML history table (last ~10 sessions, with volume) is the fallback.
+ *   OHLC and volume accumulate from the daily snapshot going forward.
  */
 import * as cheerio from "cheerio";
 import { getJson, getText } from "../lib/http.js";
 import { logger } from "../lib/logger.js";
 import { round, toNumber } from "../lib/util.js";
-import { CURRENCY, type MarketSnapshot, type PriceBar, type Security } from "./types.js";
+import { CURRENCY, type MarketSnapshot, type PriceBar, type Security, withChanges } from "./types.js";
 
 const NGX_API = "https://doclib.ngxgroup.com/REST/api/statistics/equities/";
 const AFX_BASE = "https://afx.kwayisi.org/ngx";
@@ -78,6 +79,7 @@ export async function fetchNgxSnapshot(): Promise<MarketSnapshot> {
 			name: names.get(symbol) ?? (row.Company2?.trim() || symbol),
 			sector: row.Sector ? titleCase(row.Sector.trim()) : null,
 			currency: CURRENCY.NGX,
+			venue: "NGX",
 		});
 
 		const prev = toNumber(row.PrevClosingPrice);
@@ -105,7 +107,7 @@ async function fetchAfxNames(maxPages = 5): Promise<Map<string, string>> {
 	const names = new Map<string, string>();
 	for (let page = 1; page <= maxPages; page++) {
 		const url = page === 1 ? `${AFX_BASE}/` : `${AFX_BASE}/?page=${page}`;
-		const $ = cheerio.load(await getText(url, { retries: 0, timeoutMs: 10_000 }));
+		const $ = cheerio.load(await getText(url, { retries: 1, timeoutMs: 20_000 }));
 		const before = names.size;
 		$("table tbody tr").each((_, tr) => {
 			const cells = $(tr).find("td");
@@ -118,8 +120,61 @@ async function fetchAfxNames(maxPages = 5): Promise<Map<string, string>> {
 	return names;
 }
 
-/** Recent daily history for an NGX symbol (close + volume; ~10 sessions). */
-export async function fetchNgxHistory(symbol: string): Promise<MarketSnapshot> {
+/** Default depth for NGX backfills: two years covers 52-week ranges and SMA 200. */
+export const NGX_HISTORY_SESSIONS = 520;
+
+/**
+ * Daily closes for an NGX symbol from afx's chart data (up to ~10 years), trimmed
+ * to the most recent `sessions`. Falls back to the short HTML table if the chart
+ * format changes.
+ */
+export async function fetchNgxHistory(symbol: string, sessions = NGX_HISTORY_SESSIONS): Promise<MarketSnapshot> {
+	const ticker = symbol.trim().toUpperCase();
+	try {
+		const script = await getText(`https://afx.kwayisi.org/chart/ngx/${encodeURIComponent(ticker.toLowerCase())}`, {
+			timeoutMs: 15_000,
+		});
+		const bars = parseAfxChart(ticker, script).slice(-sessions);
+		if (bars.length >= 10) {
+			return {
+				securities: [
+					{ exchange: "NGX", symbol: ticker, name: ticker, sector: null, currency: CURRENCY.NGX, venue: "NGX" },
+				],
+				bars,
+			};
+		}
+	} catch (err) {
+		logger.debug("afx chart history unavailable; using recent table", { symbol: ticker, error: String(err) });
+	}
+	return fetchNgxRecentHistory(ticker);
+}
+
+/** Parse `[d("2026-11-20"),114]` pairs from afx's Highcharts script. Exported for tests. */
+export function parseAfxChart(ticker: string, script: string): PriceBar[] {
+	const bars: PriceBar[] = [];
+	for (const m of script.matchAll(/d\("(\d{4}-\d{2}-\d{2})"\),(-?[\d.]+)\]/g)) {
+		const close = Number(m[2]);
+		if (!Number.isFinite(close) || close <= 0) continue;
+		bars.push({
+			exchange: "NGX",
+			symbol: ticker,
+			date: m[1] as string,
+			open: null,
+			high: null,
+			low: null,
+			close,
+			volume: null,
+			change: null,
+			changePct: null,
+			trades: null,
+			value: null,
+		});
+	}
+	return withChanges(bars);
+}
+
+/** Recent daily history from the afx HTML table (close + volume; ~10 sessions). */
+async function fetchNgxRecentHistory(symbol: string): Promise<MarketSnapshot> {
 	const ticker = symbol.trim().toUpperCase();
 	const html = await getText(`${AFX_BASE}/${encodeURIComponent(ticker.toLowerCase())}.html`);
 	const $ = cheerio.load(html);
@@ -151,7 +206,7 @@ export async function fetchNgxHistory(symbol: string): Promise<MarketSnapshot> {
 	const title = $("h1").first().text().trim();
 	const name = title.replace(/\s*\(NGX:[^)]*\).*$/i, "").trim() || ticker;
 	return {
-		securities: [{ exchange: "NGX", symbol: ticker, name, sector: null, currency: CURRENCY.NGX }],
+		securities: [{ exchange: "NGX", symbol: ticker, name, sector: null, currency: CURRENCY.NGX, venue: "NGX" }],
 		bars: bars.reverse(),
 	};
 }

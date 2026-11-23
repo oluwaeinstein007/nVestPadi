@@ -173,7 +173,7 @@ describe("accounts", () => {
 		const { app } = setup({ APP_MODE: "cloud" });
 		const free = user(app.db);
 		const hook = "https://discord.com/api/webhooks/123/abc-DEF_1";
-		assert.throws(() => app.accounts.updateNotifications(free, { telegramChatId: "not a chat" }), /Telegram chat ID/);
+		assert.equal(app.accounts.updateNotifications(free, { dailyDigest: false }).dailyDigest, false);
 		assert.throws(() => app.accounts.updateNotifications(free, { discordWebhookUrl: hook }), /part of Pro/);
 		const pro = user(app.db, { plan: "pro" });
 		assert.throws(() => app.accounts.updateNotifications(pro, { discordWebhookUrl: "https://evil.test/x" }), /Discord/);

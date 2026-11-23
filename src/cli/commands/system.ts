@@ -1,7 +1,10 @@
 /** Server and administration commands: serve, doctor, users. */
 import { randomBytes } from "node:crypto";
-import { EXCHANGES } from "../../markets/types.js";
-import { startScheduler } from "../../scheduler.js";
+import { registerDiscordCommands } from "../../integrations/discord.js";
+import { discordCommands, telegramCommands } from "../../integrations/handlers.js";
+import { onShutdown } from "../../lib/shutdown.js";
+import { EXCHANGES, parseExchange } from "../../markets/types.js";
+import { Scheduler } from "../../scheduler.js";
 import { startServer } from "../../server/server.js";
 import { normalizeEmail } from "../../services/authService.js";
 import { currentPlan } from "../../services/plans.js";
@@ -18,8 +21,12 @@ export const systemCommands: Record<string, Command> = {
 		async run(app, _args, flags) {
 			const port = num(flags.port, "port") ?? app.config.server.port;
 			await startServer(app, { port });
+			const scheduler = new Scheduler(app);
+			onShutdown(() => scheduler.stop());
 			const every = num(flags["sync-every"], "sync-every");
-			if (every) startScheduler(app, every, [...EXCHANGES], {});
+			if (every) scheduler.startSync(every, [...EXCHANGES]);
+			if (app.config.digests) scheduler.startDigests();
+			await scheduler.startTelegram();
 			await new Promise(() => undefined);
 		},
 	},
@@ -35,6 +42,69 @@ export const systemCommands: Record<string, Command> = {
 			for (const ch of checks) out(`  ${icon[ch.status]} ${c.bold(ch.name.padEnd(15))} ${ch.detail}`);
 			out();
 			if (checks.some((ch) => ch.status === "error")) process.exitCode = 1;
+		},
+	},
+
+	digest: {
+		usage: "digest [ngx|us|crypto] [--user email] [--send]",
+		summary: "Preview (or --send) a market digest, or a user's personal digest",
+		options: { user: { type: "string", short: "u" }, send: { type: "boolean" } },
+		async run(app, args, flags, json) {
+			const email = str(flags.user);
+			if (email) {
+				const user = app.db.users.byEmail(normalizeEmail(email));
+				if (!user) throw new UsageError(`No account for ${email}`);
+				const digest = app.digests.userDigest(user);
+				if (!digest) return out(c.dim("Nothing personal to report (empty watchlist, portfolio and alerts)."));
+				if (flags.send) {
+					const results = await app.notifier.deliver(user, digest.paragraphs, { subject: digest.subject });
+					return json
+						? results
+						: out(
+								`${c.green("✔")} sent via ${
+									results
+										.filter((r) => r.ok)
+										.map((r) => r.channel)
+										.join(", ") || "no channel"
+								}`,
+							);
+				}
+				return json ? digest : out(`${c.bold(digest.subject)}\n\n${digest.paragraphs.join("\n\n")}`);
+			}
+			const exchange = parseExchange(args[0]) ?? "NGX";
+			const text = app.digests.marketDigest(exchange);
+			if (!text) return out(c.dim(`No ${exchange} data yet — run \`nvest sync\` first.`));
+			if (flags.send) {
+				const sent = await app.digests.broadcast(text);
+				return json
+					? { sent }
+					: out(
+							`${c.green("✔")} posted to ${sent.join(", ") || "no channel (set TELEGRAM_CHAT_ID or DISCORD_WEBHOOK_URL)"}`,
+						);
+			}
+			return json ? { text } : out(text);
+		},
+	},
+
+	bots: {
+		usage: "bots setup",
+		summary: "Register Telegram commands and Discord slash commands",
+		async run(app, args) {
+			if (args[0] !== "setup") throw new UsageError("Usage: nvest bots setup");
+			if (app.telegram) {
+				await app.telegram.setCommands(telegramCommands());
+				out(`${c.green("✔")} Telegram commands set for @${await app.telegram.botUsername()}`);
+			} else out(c.dim("○ Telegram: set TELEGRAM_BOT_TOKEN"));
+			const discord = app.config.discord.app;
+			if (discord?.botToken) {
+				await registerDiscordCommands(discord.applicationId, discord.botToken, discordCommands());
+				out(`${c.green("✔")} Discord slash commands registered`);
+				out(
+					c.dim(
+						`  Interactions endpoint URL (Discord developer portal): ${app.config.appUrl}/api/integrations/discord`,
+					),
+				);
+			} else out(c.dim("○ Discord: set DISCORD_APPLICATION_ID, DISCORD_PUBLIC_KEY and DISCORD_BOT_TOKEN"));
 		},
 	},
 

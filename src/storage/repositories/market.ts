@@ -9,18 +9,77 @@ export class MarketRepository {
 	constructor(private readonly db: Database) {}
 
 	upsertSecurities(securities: Security[]) {
+		// Sparse sources (e.g. a history fetch without sector) never wipe richer metadata.
 		const stmt = this.db.prepare(`
-			INSERT INTO securities (exchange, symbol, name, sector, currency)
-			VALUES (?, ?, ?, ?, ?)
+			INSERT INTO securities (exchange, symbol, name, sector, currency, venue, industry, market_cap, source_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (exchange, symbol) DO UPDATE SET
-				name = excluded.name,
+				-- A source that only knows the ticker (e.g. a failed name lookup) never replaces a real name.
+				name = CASE WHEN excluded.name = excluded.symbol THEN securities.name ELSE excluded.name END,
 				sector = COALESCE(excluded.sector, securities.sector),
 				currency = excluded.currency,
+				venue = COALESCE(excluded.venue, securities.venue),
+				industry = COALESCE(excluded.industry, securities.industry),
+				market_cap = COALESCE(excluded.market_cap, securities.market_cap),
+				source_id = COALESCE(excluded.source_id, securities.source_id),
 				updated_at = datetime('now')
 		`);
 		this.db.transaction(() => {
-			for (const s of securities) stmt.run(s.exchange, s.symbol, s.name, s.sector, s.currency);
+			for (const s of securities) {
+				stmt.run(
+					s.exchange,
+					s.symbol,
+					s.name,
+					s.sector,
+					s.currency,
+					s.venue ?? null,
+					s.industry ?? null,
+					s.marketCap ?? null,
+					s.sourceId ?? null,
+				);
+			}
 		});
+	}
+
+	/** Update listing metadata (sector, venue, …) without touching names or prices. */
+	enrichSecurities(
+		exchange: Exchange,
+		meta: Map<
+			string,
+			{ sector?: string | null; industry?: string | null; venue?: string | null; marketCap?: number | null }
+		>,
+	): number {
+		const stmt = this.db.prepare(`
+			UPDATE securities SET
+				sector = COALESCE(?, sector),
+				industry = COALESCE(?, industry),
+				venue = COALESCE(?, venue),
+				market_cap = COALESCE(?, market_cap)
+			WHERE exchange = ? AND symbol = ?
+		`);
+		let updated = 0;
+		this.db.transaction(() => {
+			for (const [symbol, m] of meta) {
+				updated += Number(
+					stmt.run(m.sector ?? null, m.industry ?? null, m.venue ?? null, m.marketCap ?? null, exchange, symbol)
+						.changes,
+				);
+			}
+		});
+		return updated;
+	}
+
+	/** Symbols on an exchange with fewer than `minBars` stored sessions — candidates for backfill. */
+	thinHistory(exchange: Exchange, minBars: number): string[] {
+		return (
+			this.db
+				.prepare(
+					`SELECT s.symbol FROM securities s
+					 LEFT JOIN daily_prices p ON p.exchange = s.exchange AND p.symbol = s.symbol
+					 WHERE s.exchange = ? GROUP BY s.symbol HAVING COUNT(p.date) < ? ORDER BY s.symbol`,
+				)
+				.all(exchange, minBars) as { symbol: string }[]
+		).map((r) => r.symbol);
 	}
 
 	upsertPrices(bars: PriceBar[]) {
@@ -107,7 +166,7 @@ export class MarketRepository {
 	latestQuotes(exchange?: Exchange): Quote[] {
 		const rows = this.db
 			.prepare(`
-				SELECT p.*, s.name, s.sector, s.currency
+				SELECT p.*, s.name, s.sector, s.currency, s.venue, s.market_cap
 				FROM daily_prices p
 				JOIN securities s ON s.exchange = p.exchange AND s.symbol = p.symbol
 				WHERE (? IS NULL OR p.exchange = ?)
@@ -124,7 +183,7 @@ export class MarketRepository {
 	latestQuote(exchange: Exchange, symbol: string): Quote | null {
 		const row = this.db
 			.prepare(`
-				SELECT p.*, s.name, s.sector, s.currency
+				SELECT p.*, s.name, s.sector, s.currency, s.venue, s.market_cap
 				FROM daily_prices p
 				JOIN securities s ON s.exchange = p.exchange AND s.symbol = p.symbol
 				WHERE p.exchange = ? AND p.symbol = ?
@@ -159,6 +218,10 @@ function toSecurity(r: Row): Security {
 		name: String(r.name),
 		sector: (r.sector as string | null) ?? null,
 		currency: String(r.currency),
+		venue: (r.venue as string | null) ?? null,
+		industry: (r.industry as string | null) ?? null,
+		marketCap: num(r.market_cap),
+		sourceId: (r.source_id as string | null) ?? null,
 	};
 }
 
@@ -185,5 +248,7 @@ function toQuote(r: Row): Quote {
 		name: String(r.name),
 		sector: (r.sector as string | null) ?? null,
 		currency: String(r.currency),
+		venue: (r.venue as string | null) ?? null,
+		marketCap: num(r.market_cap),
 	};
 }

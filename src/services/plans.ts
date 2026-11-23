@@ -7,6 +7,7 @@ import type { PlanId, User } from "../storage/repositories/users.js";
 
 export interface PlanLimits {
 	watchlist: number;
+	holdings: number;
 	activeAlerts: number;
 	aiQuestionsPerDay: number;
 	discordAlerts: boolean;
@@ -30,7 +31,7 @@ export const PLANS: Record<PlanId, Plan> = {
 		priceLabel: "₦0",
 		amountKobo: 0,
 		tagline: "Follow the market and a handful of stocks.",
-		limits: { watchlist: 10, activeAlerts: 3, aiQuestionsPerDay: 5, discordAlerts: false },
+		limits: { watchlist: 10, holdings: 10, activeAlerts: 3, aiQuestionsPerDay: 5, discordAlerts: false },
 	},
 	pro: {
 		id: "pro",
@@ -38,12 +39,13 @@ export const PLANS: Record<PlanId, Plan> = {
 		priceLabel: "₦4,500/month",
 		amountKobo: 450_000,
 		tagline: "For active investors who research every day.",
-		limits: { watchlist: 100, activeAlerts: 50, aiQuestionsPerDay: 100, discordAlerts: true },
+		limits: { watchlist: 100, holdings: 200, activeAlerts: 50, aiQuestionsPerDay: 100, discordAlerts: true },
 	},
 };
 
 const UNLIMITED: PlanLimits = {
 	watchlist: Number.POSITIVE_INFINITY,
+	holdings: Number.POSITIVE_INFINITY,
 	activeAlerts: Number.POSITIVE_INFINITY,
 	aiQuestionsPerDay: Number.POSITIVE_INFINITY,
 	discordAlerts: true,

@@ -57,11 +57,11 @@ describe("HTTP API (cloud mode)", () => {
 		seed(app.db, [
 			{
 				s: security("GTCO", "Guaranty Trust", "Financial Services"),
-				closes: Array.from({ length: 30 }, (_, i) => 100 + i),
+				closes: Array.from({ length: 70 }, (_, i) => 100 + i),
 			},
 			{
 				s: security("ZENITHBANK", "Zenith Bank", "Financial Services"),
-				closes: Array.from({ length: 30 }, (_, i) => 50 - i / 2),
+				closes: Array.from({ length: 70 }, (_, i) => 50 - i / 2),
 			},
 		]);
 		server = createServer(createRequestHandler(app));

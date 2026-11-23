@@ -1,5 +1,17 @@
 # Upgrading
 
+## v3.0 → v3.1 (crypto, portfolio, bots and digests)
+
+The database migrates automatically (schema v3). Nothing is removed.
+
+- **`TELEGRAM_CHAT_ID` and `DISCORD_WEBHOOK_URL` are back** with a new meaning: server-wide broadcast channels for daily market digests. They are no longer personal alert targets. v3.0 warned if they were set; v3.1 uses them.
+- **Telegram linking replaced typed chat IDs.** Users click **Connect Telegram** in Settings. Existing chat IDs keep working. `PUT /api/account/notifications` no longer accepts `telegramChatId`; use `POST /api/account/telegram/link` and `DELETE /api/account/telegram`.
+- **New optional variables:** `TELEGRAM_WEBHOOK_SECRET`, `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`, `DAILY_DIGEST` (default `true`), `COINGECKO_API_KEY`.
+- **Personal digests are on by default** for every account (`users.daily_digest = 1`). They're only sent when the user has an active channel and something personal to report. Users can turn them off in Settings or with `/digest off`.
+- **New market `CRYPTO`.** `nvest sync` (= `all`) now also syncs the top 100 coins. To skip it, sync `ngx` and `us` explicitly.
+- **History:** NGX symbols are backfilled with up to 520 sessions in the background after each sync. Run `nvest sync ngx --backfill` to do them all at once (a few minutes). US history now defaults to 2 years.
+- **Health check** `/api/health` now queries the database and returns `version` and `uptimeSeconds`. Every response carries an `X-Request-Id` header.
+
 ## v2 → v3 (accounts and the hosted product)
 
 v3 turns nVestPadi from a single-user tool into a multi-user product with accounts. Your data carries over automatically.

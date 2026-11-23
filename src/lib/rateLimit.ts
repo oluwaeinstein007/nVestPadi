@@ -1,5 +1,5 @@
 /** In-memory sliding-window rate limiter (per process; fine for a single instance). */
-import { RateLimitError } from "../lib/errors.js";
+import { RateLimitError } from "./errors.js";
 
 export type Limiter = (key: string) => void;
 

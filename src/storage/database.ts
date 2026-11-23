@@ -10,6 +10,8 @@ import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { MIGRATIONS } from "./migrations.js";
 import { AlertRepository } from "./repositories/alerts.js";
+import { HoldingsRepository } from "./repositories/holdings.js";
+import { JobStateRepository } from "./repositories/jobState.js";
 import { KnowledgeLedger } from "./repositories/knowledge.js";
 import { MarketRepository } from "./repositories/market.js";
 import { UsageRepository } from "./repositories/usage.js";
@@ -27,6 +29,8 @@ export class Database {
 	readonly watchlist: WatchlistRepository;
 	readonly alerts: AlertRepository;
 	readonly usage: UsageRepository;
+	readonly holdings: HoldingsRepository;
+	readonly jobs: JobStateRepository;
 
 	constructor(file: string) {
 		if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
@@ -39,6 +43,8 @@ export class Database {
 		this.watchlist = new WatchlistRepository(this);
 		this.alerts = new AlertRepository(this);
 		this.usage = new UsageRepository(this);
+		this.holdings = new HoldingsRepository(this);
+		this.jobs = new JobStateRepository(this);
 	}
 
 	private migrate() {
@@ -49,6 +55,11 @@ export class Database {
 				this.conn.exec(`PRAGMA user_version = ${v + 1}`);
 			});
 		}
+	}
+
+	/** Throws if the database can't be queried (used by the health check). */
+	ping() {
+		this.prepare("SELECT 1").get();
 	}
 
 	get schemaVersion(): number {

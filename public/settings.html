@@ -66,6 +66,7 @@
 							<select name="defaultExchange">
 								<option value="NGX">Nigerian Exchange (NGX)</option>
 								<option value="US">US equities</option>
+								<option value="CRYPTO">Crypto</option>
 							</select>
 							<small>The dashboard opens on this market.</small>
 						</label>
@@ -81,10 +82,18 @@
 							<input type="checkbox" name="emailAlerts" />
 							<span><b>Email</b> <span class="muted small" id="email-channel-note"></span></span>
 						</label>
-						<label class="field" id="telegram-field">
-							<span>Telegram chat ID</span>
-							<input name="telegramChatId" inputmode="numeric" placeholder="e.g. 123456789" autocomplete="off" />
-							<small id="telegram-help"></small>
+						<div class="field" id="telegram-field">
+							<span>Telegram</span>
+							<div class="row">
+								<span id="telegram-status" class="tag"></span>
+								<button class="btn" type="button" id="telegram-connect">Connect Telegram</button>
+								<button class="link" type="button" id="telegram-disconnect" hidden>Disconnect</button>
+							</div>
+							<small>Opens a chat with our bot. Once connected it sends your alerts and digest, and answers /watchlist, /portfolio and /ask.</small>
+						</div>
+						<label class="switch">
+							<input type="checkbox" name="dailyDigest" />
+							<span><b>Daily digest</b> <span class="muted small">— your watchlist, portfolio and alerts after your default market closes</span></span>
 						</label>
 						<label class="field">
 							<span>Discord webhook URL <span class="tag" id="discord-tag">Pro</span></span>

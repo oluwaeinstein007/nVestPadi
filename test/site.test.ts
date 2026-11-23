@@ -13,6 +13,7 @@ describe("static site", () => {
 		for (const plan of Object.values(PLANS)) {
 			assert.ok(html.includes(`${plan.limits.watchlist} watchlist stocks`), `${plan.id} watchlist`);
 			assert.ok(html.includes(`${plan.limits.activeAlerts} active alerts`), `${plan.id} alerts`);
+			assert.ok(html.includes(`${plan.limits.holdings} portfolio positions`), `${plan.id} holdings`);
 			assert.ok(html.includes(`${plan.limits.aiQuestionsPerDay} AI questions a day`), `${plan.id} AI`);
 		}
 		assert.ok(html.includes(PLANS.pro.priceLabel.split("/")[0] as string), "Pro price");

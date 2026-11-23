@@ -21,6 +21,7 @@
 			<div class="segmented" role="tablist" aria-label="Exchange">
 				<button role="tab" data-exchange="NGX" aria-selected="true">NGX</button>
 				<button role="tab" data-exchange="US" aria-selected="false">US</button>
+				<button role="tab" data-exchange="CRYPTO" aria-selected="false">Crypto</button>
 			</div>
 
 			<div class="search" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="search-results">
@@ -70,7 +71,7 @@
 						</div>
 					</article>
 					<article class="stat">
-						<h3>Value traded</h3>
+						<h3 id="value-label">Value traded</h3>
 						<p class="stat-value" id="value">—</p>
 						<p class="muted small" id="volume"></p>
 					</article>
@@ -93,6 +94,7 @@
 							<button role="tab" data-movers="gainers" aria-selected="true">Gainers</button>
 							<button role="tab" data-movers="losers" aria-selected="false">Losers</button>
 							<button role="tab" data-movers="mostActive" aria-selected="false">Most traded</button>
+							<button role="tab" data-movers="heatmap" aria-selected="false">Heatmap</button>
 						</div>
 					</div>
 					<ol id="movers" class="movers"></ol>
@@ -125,7 +127,7 @@
 					<div class="table-wrap">
 						<table class="data">
 							<thead>
-								<tr><th>Symbol</th><th class="hide-sm">Sector</th><th class="num">Price</th><th class="num">Change</th><th class="num hide-sm">Value</th><th class="num" id="rsi-col" hidden>RSI</th></tr>
+								<tr><th>Symbol</th><th class="hide-sm">Sector</th><th class="num">Price</th><th class="num">Change</th><th class="num hide-sm">Value</th><th class="num hide-sm" id="mcap-col" hidden>Mkt cap</th><th class="num" id="rsi-col" hidden>RSI</th></tr>
 							</thead>
 							<tbody id="screen-body"></tbody>
 						</table>
@@ -145,6 +147,18 @@
 						</div>
 					</form>
 					<div id="answer" class="answer" aria-live="polite"></div>
+				</section>
+
+				<section class="card">
+					<div class="card-head"><h2>Portfolio</h2><span class="muted small" id="holding-count"></span></div>
+					<div id="portfolio-totals" class="pf-totals"></div>
+					<ul id="portfolio" class="watchlist"></ul>
+					<form id="portfolio-form" class="alert-form pf-form">
+						<input name="symbol" placeholder="Ticker" aria-label="Ticker" required />
+						<input name="quantity" type="number" step="any" min="0" placeholder="Qty" aria-label="Quantity" required />
+						<input name="avgCost" type="number" step="any" min="0" placeholder="Cost each" aria-label="Average cost per unit" required />
+						<button class="btn" type="submit">Add</button>
+					</form>
 				</section>
 
 				<section class="card">

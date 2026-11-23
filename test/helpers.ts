@@ -1,4 +1,5 @@
-import type { PriceBar, Security } from "../src/markets/types.js";
+import { CoinGecko } from "../src/markets/coingecko.js";
+import type { Exchange, PriceBar, Security } from "../src/markets/types.js";
 import type { EmailMessage, Mailer } from "../src/services/mailer.js";
 import { Database } from "../src/storage/database.js";
 import type { User } from "../src/storage/repositories/users.js";
@@ -11,7 +12,7 @@ export function memoryDb(): Database {
 export function makeBars(
 	symbol: string,
 	closes: number[],
-	exchange: "NGX" | "US" = "NGX",
+	exchange: Exchange = "NGX",
 	start = "2025-01-01",
 ): PriceBar[] {
 	const day = new Date(`${start}T00:00:00Z`);
@@ -39,7 +40,7 @@ export function security(
 	symbol: string,
 	name: string,
 	sector: string | null = null,
-	exchange: "NGX" | "US" = "NGX",
+	exchange: Exchange = "NGX",
 ): Security {
 	return { exchange, symbol, name, sector, currency: exchange === "NGX" ? "NGN" : "USD" };
 }
@@ -79,3 +80,6 @@ export class TestMailer implements Mailer {
 		return decodeURIComponent(match[1]);
 	}
 }
+
+/** MarketService options for tests that never touch the network. */
+export const marketOptions = { usSymbols: [] as string[], coingecko: new CoinGecko() };

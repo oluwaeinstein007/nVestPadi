@@ -10,7 +10,7 @@ import { marketOverview } from "../analysis/market.js";
 import { reportToText } from "../analysis/report.js";
 import { FeatureUnavailableError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";
-import type { Exchange } from "../markets/types.js";
+import { EXCHANGES, type Exchange } from "../markets/types.js";
 import type { Database } from "../storage/database.js";
 import type { KnowledgeBase } from "./knowledgeBase.js";
 import type { MarketService } from "./marketService.js";
@@ -31,17 +31,17 @@ export interface Answer {
 	model: string;
 }
 
-const SYSTEM_PROMPT = `You are nVestPadi, a research assistant for Nigerian Exchange (NGX) and US equities.
+const SYSTEM_PROMPT = `You are nVestPadi, a research assistant for Nigerian Exchange (NGX) stocks, US stocks and crypto.
 Rules:
 - Answer ONLY from the numbered context. Never invent prices, dates or figures.
 - Cite every factual claim inline with its context number, e.g. "closed at 1,323 [2]".
 - If the context doesn't cover the question, say so plainly and suggest what would help (e.g. opening the stock in nVestPadi to load its history, or adding research documents).
-- Prefer specifics: numbers, percentages, dates. Use NGN for NGX prices and USD for US.
+- Prefer specifics: numbers, percentages, dates. Use NGN for NGX prices and USD for US stocks and crypto.
 - Be concise: a direct answer first, then short supporting bullets.
 - You provide information, not personalised investment advice.`;
 
 const MARKET_WORDS =
-	/\b(market|markets|gainers?|losers?|movers?|sectors?|breadth|today|this week|rall(y|ied)|top|best|worst|biggest|index|asi)\b/i;
+	/\b(market|markets|gainers?|losers?|movers?|sectors?|breadth|today|this week|rall(y|ied)|top|best|worst|biggest|index|asi|crypto|coins?)\b/i;
 const NAME_SUFFIX = /\s+(plc|inc\.?|corp(oration)?\.?|holdings?|limited|ltd\.?|company|co\.?|group)\b.*$/i;
 
 export class InsightService {
@@ -59,7 +59,8 @@ export class InsightService {
 		const tokens = new Set(
 			(question.match(/\b[A-Za-z][A-Za-z0-9.-]{0,11}\b/g) ?? [])
 				// All-caps tokens are tickers; lowercase ones only if long enough to not be English words.
-				.filter((t) => t === t.toUpperCase() || t.length >= 5)
+				// Single letters ("I", "A") are almost never meant as tickers.
+				.filter((t) => t.length >= 2 && (t === t.toUpperCase() || t.length >= 5))
 				.map((t) => t.toUpperCase()),
 		);
 		for (const s of this.db.market.allSymbols()) {
@@ -93,7 +94,7 @@ export class InsightService {
 		}
 
 		if (MARKET_WORDS.test(question) || symbols.length === 0) {
-			const exchanges: Exchange[] = options.exchange ? [options.exchange] : ["NGX", "US"];
+			const exchanges: Exchange[] = options.exchange ? [options.exchange] : [...EXCHANGES];
 			for (const exchange of exchanges) {
 				const o = marketOverview(this.db, exchange, 5);
 				if (o.count === 0) continue;

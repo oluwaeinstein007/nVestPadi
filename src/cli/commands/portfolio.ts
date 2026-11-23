@@ -6,7 +6,7 @@ import { c, pct, price, sparkline, table } from "../format.js";
 
 export const portfolioCommands: Record<string, Command> = {
 	watchlist: {
-		usage: "watchlist [list | add <SYMBOL...> | remove <SYMBOL...>] [--exchange NGX|US] [--user email]",
+		usage: "watchlist [list | add <SYMBOL...> | remove <SYMBOL...>] [--exchange NGX|US|CRYPTO] [--user email]",
 		summary: "Track the stocks you care about",
 		options: { ...exchangeFlag, ...userFlag },
 		async run(app, args, flags, json) {

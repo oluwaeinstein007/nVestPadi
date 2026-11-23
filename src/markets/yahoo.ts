@@ -16,6 +16,8 @@ interface ChartResult {
 		shortName?: string;
 		currency?: string;
 		chartPreviousClose?: number;
+		exchangeName?: string;
+		fullExchangeName?: string;
 	};
 	timestamp?: number[];
 	indicators: {
@@ -73,8 +75,28 @@ async function fetchChart(symbol: string, range: string): Promise<MarketSnapshot
 		name: result.meta.longName ?? result.meta.shortName ?? ticker,
 		sector: null,
 		currency: result.meta.currency ?? CURRENCY.US,
+		venue: usVenue(result.meta.exchangeName, result.meta.fullExchangeName),
 	};
 	return { securities: [security], bars };
+}
+
+const VENUES: Record<string, string> = {
+	NMS: "Nasdaq",
+	NGM: "Nasdaq",
+	NCM: "Nasdaq",
+	NAS: "Nasdaq",
+	NYQ: "NYSE",
+	NYS: "NYSE",
+	ASE: "NYSE American",
+	PCX: "NYSE Arca",
+	BTS: "Cboe",
+};
+
+/** Yahoo exchange codes ("NMS", "NYQ") → the venue names investors know. */
+export function usVenue(code?: string, full?: string): string | null {
+	if (code && VENUES[code]) return VENUES[code] as string;
+	if (full?.startsWith("Nasdaq")) return "Nasdaq";
+	return full ?? null;
 }
 
 export function fetchUsHistory(symbol: string, range: YahooRange = "1y"): Promise<MarketSnapshot> {

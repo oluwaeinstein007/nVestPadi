@@ -2,16 +2,21 @@
 import { SCREEN_SORTS, type ScreenSort, marketOverview, screen } from "../../analysis/market.js";
 import { parseExchange } from "../../markets/types.js";
 import { YAHOO_RANGES, type YahooRange } from "../../markets/yahoo.js";
-import { startScheduler } from "../../scheduler.js";
+import { Scheduler } from "../../scheduler.js";
 import { SymbolNotFoundError } from "../../services/marketService.js";
 import { type Command, UsageError, exchangeFlag, exchangesArg, num, out, str } from "../command.js";
 import { c, compact, heading, kv, pct, price, signalBadge, sparkline, table } from "../format.js";
 
 export const marketCommands: Record<string, Command> = {
 	sync: {
-		usage: "sync [ngx|us|all] [--symbols AAPL,MSFT] [--no-index] [--every <minutes>]",
+		usage: "sync [ngx|us|crypto|all] [--symbols AAPL,MSFT] [--no-index] [--backfill] [--every <minutes>]",
 		summary: "Fetch the latest session's prices, store them, index them and check alerts",
-		options: { symbols: { type: "string" }, "no-index": { type: "boolean" }, every: { type: "string" } },
+		options: {
+			symbols: { type: "string" },
+			"no-index": { type: "boolean" },
+			backfill: { type: "boolean" },
+			every: { type: "string" },
+		},
 		async run(app, args, flags, json) {
 			const exchanges = exchangesArg(args[0]);
 			const options = {
@@ -23,10 +28,16 @@ export const marketCommands: Record<string, Command> = {
 			};
 			const every = num(flags.every, "every");
 			if (every) {
-				startScheduler(app, every, exchanges, options);
+				new Scheduler(app).startSync(every, exchanges, options);
 				await new Promise(() => undefined); // run until interrupted
 			}
 			const result = await app.syncAndAlert(exchanges, options);
+			if (flags.backfill) {
+				for (const r of result.results) {
+					const n = await app.market.backfill(r.exchange, { limit: 1000 });
+					if (!json) out(`${c.green("✔")} ${c.bold(r.exchange)}  backfilled history for ${n} symbols`);
+				}
+			}
 			if (json) return result;
 			for (const r of result.results) {
 				out(
@@ -43,7 +54,7 @@ export const marketCommands: Record<string, Command> = {
 		},
 	},
 	history: {
-		usage: "history <SYMBOL> [--exchange NGX|US] [--range 1y]",
+		usage: "history <SYMBOL> [--exchange NGX|US|CRYPTO] [--range 1y]",
 		summary: `Backfill daily history (US ranges: ${YAHOO_RANGES.join(" ")})`,
 		options: { ...exchangeFlag, range: { type: "string", short: "r" } },
 		async run(app, args, flags, json) {
@@ -60,12 +71,10 @@ export const marketCommands: Record<string, Command> = {
 			out(
 				`${c.green("✔")} ${result.exchange}:${result.symbol}  ${result.bars} daily bars ${c.dim(`${result.from} → ${result.to}`)}`,
 			);
-			if (result.exchange === "NGX")
-				out(c.dim("  NGX public history covers ~10 sessions; it grows each day you run `nvest sync`."));
 		},
 	},
 	quote: {
-		usage: "quote <SYMBOL...> [--exchange NGX|US]",
+		usage: "quote <SYMBOL...> [--exchange NGX|US|CRYPTO]",
 		summary: "Show the latest stored quote for one or more symbols",
 		options: exchangeFlag,
 		async run(app, args, flags, json) {
@@ -91,7 +100,7 @@ export const marketCommands: Record<string, Command> = {
 		},
 	},
 	analyze: {
-		usage: "analyze <SYMBOL> [--exchange NGX|US]",
+		usage: "analyze <SYMBOL> [--exchange NGX|US|CRYPTO]",
 		summary: "Technical report: trend, RSI, MACD, moving averages, signals, performance",
 		options: exchangeFlag,
 		async run(app, args, flags, json) {
@@ -153,7 +162,7 @@ export const marketCommands: Record<string, Command> = {
 		},
 	},
 	market: {
-		usage: "market [--exchange NGX|US] [--top 5]",
+		usage: "market [--exchange NGX|US|CRYPTO] [--top 5]",
 		summary: "Market breadth, top gainers/losers, most traded and sector performance",
 		options: { ...exchangeFlag, top: { type: "string" } },
 		async run(app, _args, flags, json) {

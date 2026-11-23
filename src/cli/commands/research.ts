@@ -43,7 +43,7 @@ export const researchCommands: Record<string, Command> = {
 		},
 	},
 	search: {
-		usage: "search <query...> [--exchange NGX|US] [--limit 8]",
+		usage: "search <query...> [--exchange NGX|US|CRYPTO] [--limit 8]",
 		summary: "Semantic search across ingested documents and market history",
 		options: { ...exchangeFlag, limit: { type: "string", short: "n" } },
 		async run(app, args, flags, json) {
@@ -65,7 +65,7 @@ export const researchCommands: Record<string, Command> = {
 		},
 	},
 	ask: {
-		usage: 'ask "<question>" [--exchange NGX|US]',
+		usage: 'ask "<question>" [--exchange NGX|US|CRYPTO]',
 		summary: "Ask a question; get an answer grounded in your data, with citations",
 		options: exchangeFlag,
 		async run(app, args, flags, json) {

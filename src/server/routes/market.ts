@@ -3,9 +3,9 @@ import { z } from "zod";
 import { SCREEN_SORTS, marketOverview, screen } from "../../analysis/market.js";
 import type { App } from "../../app.js";
 import { NotFoundError } from "../../lib/errors.js";
+import { rateLimiter } from "../../lib/rateLimit.js";
 import type { Exchange } from "../../markets/types.js";
 import { ALERT_CONDITIONS } from "../../services/alertService.js";
-import { rateLimiter } from "../rateLimit.js";
 import type { Router } from "../router.js";
 import { exchangeSchema, optionalNumber, queryObject } from "./shared.js";
 
@@ -76,7 +76,7 @@ export function marketRoutes(r: Router, app: App) {
 	r.get("/api/securities/:exchange/:symbol", async (ctx) => {
 		const exchange = exchangeSchema.parse(ctx.params.exchange);
 		const report = await app.market.report(ctx.params.symbol as string, exchange);
-		const history = app.db.market.history(exchange, report.security.symbol, 260);
+		const history = app.db.market.history(exchange, report.security.symbol, 730);
 		return { report, history, watched: app.watchlists.has(ctx.user, exchange, report.security.symbol) };
 	});
 
@@ -90,6 +90,29 @@ export function marketRoutes(r: Router, app: App) {
 	r.delete("/api/watchlist/:exchange/:symbol", (ctx) => {
 		app.watchlists.remove(ctx.user, ctx.params.symbol as string, exchangeSchema.parse(ctx.params.exchange));
 		return app.watchlists.list(ctx.user);
+	});
+
+	// -- Portfolio ---------------------------------------------------------------------
+	const holdingSchema = z.object({
+		quantity: z.coerce.number().positive("Quantity must be greater than 0."),
+		avgCost: z.coerce.number().min(0, "Cost per unit can't be negative."),
+		note: z.string().max(200).optional(),
+	});
+	r.get("/api/portfolio", (ctx) => app.portfolio.get(ctx.user));
+	r.post("/api/portfolio", async (ctx) => {
+		const b = holdingSchema
+			.extend({ symbol: z.string().min(1).max(24), exchange: z.string().optional() })
+			.parse(ctx.body);
+		await app.portfolio.add(ctx.user, { ...b, exchange: b.exchange ? exchangeSchema.parse(b.exchange) : undefined });
+		return app.portfolio.get(ctx.user);
+	});
+	r.put("/api/portfolio/:id", (ctx) => {
+		app.portfolio.update(ctx.user, Number(ctx.params.id), holdingSchema.parse(ctx.body));
+		return app.portfolio.get(ctx.user);
+	});
+	r.delete("/api/portfolio/:id", (ctx) => {
+		app.portfolio.remove(ctx.user, Number(ctx.params.id));
+		return app.portfolio.get(ctx.user);
 	});
 
 	// -- Alerts ------------------------------------------------------------------------

@@ -4,16 +4,16 @@
 
 # nVestPadi
 
-**The AI research desk for Nigerian (NGX) and US stocks.**
+**The AI research desk for Nigerian (NGX) stocks, US stocks and crypto.**
 
-Daily market data · plain-English technical reports · screener · email & Telegram alerts · AI answers that cite their sources
+Daily market data · plain-English technical reports · portfolio tracker · screener · alerts & daily digests on email, Telegram and Discord · AI answers that cite their sources
 
 [![CI](https://github.com/oluwaeinstein007/nVestPadi/actions/workflows/ci.yml/badge.svg)](https://github.com/oluwaeinstein007/nVestPadi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0b7a4b.svg)](LICENSE)
 ![Node ≥ 22.13](https://img.shields.io/badge/node-%E2%89%A522.13-0b7a4b.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)
 
-[Product](#the-product) · [Self-host](#self-host-in-3-commands) · [Run the hosted product](#run-it-as-a-hosted-product) · [CLI](#cli) · [API](#rest-api) · [Architecture](docs/architecture.md) · [Upgrading](docs/upgrading.md)
+[Product](#the-product) · [Bots & digests](#telegram--discord-bots-and-daily-digests) · [Self-host](#self-host-in-3-commands) · [Run the hosted product](#run-it-as-a-hosted-product) · [CLI](#cli) · [API](#rest-api) · [Architecture](docs/architecture.md) · [Upgrading](docs/upgrading.md)
 
 <br />
 
@@ -30,9 +30,9 @@ Daily market data · plain-English technical reports · screener · email & Tele
 
 Researching Nigerian stocks usually means juggling the NGX website, broker PDFs, spreadsheets and WhatsApp groups. nVestPadi puts it in one place:
 
-- **Market data built in.** The full NGX daily board (about 150 equities) and any US tickers, with no data subscription.
+- **Market data built in.** The full NGX daily board (about 150 equities, with up to 2 years of history), NYSE and Nasdaq stocks labelled by exchange and sector, and the top 100 coins. No data subscription needed.
 - **Analysis you can read.** Every stock gets a technical report in plain English, not just a chart.
-- **Alerts where you already are.** Email, Telegram or Discord when a price, RSI or volume condition hits.
+- **Alerts where you already are.** Email, Telegram or Discord when a price, RSI or volume condition hits, plus a daily wrap-up of your own watchlist and portfolio.
 - **AI that shows its work.** Answers cite the market data and documents they used, and the model is told never to invent figures.
 - **Hosted or yours.** Sign up for the hosted app, or run the same code on your own server with every feature unlocked.
 
@@ -66,9 +66,10 @@ Pages are guarded on the server: signed-out visitors are sent to `/login?next=�
 |---|---|---|
 | Market dashboard, reports, screener | ✓ | ✓ |
 | Watchlist | 10 stocks | 100 stocks |
+| Portfolio positions | 10 | 200 |
 | Active alerts | 3 | 50 |
 | AI questions | 5 / day | 100 / day |
-| Alert delivery | Email, Telegram | Email, Telegram, Discord |
+| Alert delivery & daily digest | Email, Telegram | Email, Telegram, Discord |
 
 Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps the landing page's pricing copy in sync with them. Hitting a limit returns HTTP `402` with `code: "plan_limit"`, and the UI offers an upgrade.
 
@@ -79,12 +80,32 @@ Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps th
 | 📊 **Market breadth** | Advancers vs decliners, value traded, top gainers and losers, the most traded stocks, and every sector ranked by its move |
 | 📈 **Technical reports** | Trend, RSI, MACD, SMA 20/50/200, Bollinger Bands, ATR, volatility, 52-week range, 1W–1Y performance and BUY/SELL signals with reasons |
 | 🔎 **Screener** | Filter by sector, name, price and RSI (e.g. *oversold banks*); sort by gainers, losers, value, volume or RSI |
-| ⭐ **Watchlist** | Per-user NGX and US symbols side by side, with sparklines |
+| 🌍 **Three markets** | NGX (~150 equities), US stocks with NYSE/Nasdaq venue, sector, industry and market cap, and the top 100 crypto coins |
+| ⭐ **Watchlist** | Per-user NGX, US and crypto symbols side by side, with sparklines |
+| 💼 **Portfolio** | Positions with average cost, live value, today's and total P&L, and weights, per currency (NGN and USD are never mixed) |
+| 🟩 **Heatmap & charts** | Most-traded names sized by value and coloured by move; price chart with 1M–2Y ranges, SMA overlays and volume |
 | 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`; one digest per user per sync; re-arm after firing |
+| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
+| 📰 **Daily digests** | Market wrap-ups to a Telegram channel and Discord webhook; personal digests built only from each user's own data |
 | 💬 **Ask AI** | Answers grounded in live reports, market breadth and the research library, with numbered citations |
 | 📄 **Research library** | Annual-report PDFs, HTML, CSV, JSON, Markdown, or whole websites (robots.txt-aware), added by the operator with `nvest ingest` |
 | 👤 **Accounts** | Email/password sign-up, email verification, password reset, session management, personal API tokens, account deletion |
 | 🖥️ **Web app + CLI** | Landing page, responsive light/dark app, REST API and a scriptable `nvest` CLI (`--json` everywhere) |
+
+## Telegram & Discord bots and daily digests
+
+There are two kinds of chat delivery, and they never mix:
+
+| | Server channels (set in `.env`) | Personal (set by each user in Settings) |
+|---|---|---|
+| Telegram | `TELEGRAM_BOT_TOKEN` runs the bot. `TELEGRAM_CHAT_ID` is a channel or group that gets the **daily market digest**, and anyone there can use `/market`, `/quote`, `/analyze` and `/ask` (rate-limited) | **Connect Telegram** opens a one-time `t.me` link. That private chat then gets the user's **alerts** and **personal digest**, and answers `/watchlist`, `/portfolio`, `/alerts`, `/digest on\|off` and `/ask` (counted against their plan) |
+| Discord | `DISCORD_WEBHOOK_URL` gets the daily market digest. With an app (`DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`), `/market`, `/quote`, `/analyze` and `/ask` work as slash commands in any server that adds it | A Pro user's own channel webhook gets their alerts and personal digest |
+
+- **Personal digests** contain only that user's watchlist moves, portfolio value and P&L, and alert status. They're sent after the user's default market closes and skipped when there's nothing personal to report.
+- **Schedule (UTC):** NGX 15:00 (after the 14:30 WAT close), US 21:30, crypto 07:00. Stock markets skip weekends and days without a new session. Each digest is claimed in the database before sending, so restarts never double-send. Runs inside `nvest serve`; turn off with `DAILY_DIGEST=false`.
+- **Telegram delivery:** with `TELEGRAM_WEBHOOK_SECRET` and an https `APP_URL`, Telegram pushes updates to `/api/integrations/telegram` (verified by the secret header). Otherwise the server long-polls, which suits laptops and private servers. Run one instance per bot token.
+- **Discord setup:** set the app's *Interactions Endpoint URL* to `<APP_URL>/api/integrations/discord` (requests are verified with Ed25519), then run `pnpm nvest bots setup` to register the slash commands.
+- **Preview:** `nvest digest ngx` prints today's market digest, `nvest digest --user you@example.com` prints a personal one, and `--send` delivers it.
 
 ## Self-host in 3 commands
 
@@ -146,9 +167,29 @@ pnpm nvest ask "How did Nigerian banks trade this week?"
    ```
 
 2. **Paystack:** create the monthly plan, then set the webhook URL to `https://app.yourdomain.com/api/billing/webhook`. The webhook is the source of truth for plan changes. It's verified with the HMAC-SHA512 signature, upgrades on `subscription.create` / `charge.success`, and downgrades on `subscription.disable`.
-3. **Deploy:** [`render.yaml`](render.yaml) is a ready Render blueprint (Docker + a 1 GB disk for SQLite). Any Docker host works: mount `/data`, expose port 3000, put HTTPS in front.
+3. **Deploy:** [`render.yaml`](render.yaml) is a ready Render blueprint (Docker + a 1 GB disk for SQLite). Any Docker host works: mount `/data`, expose port 3000, put HTTPS in front. No persistent disk (e.g. Render's free plan)? Use [free persistent storage](#free-persistent-storage-litestream) instead.
 4. **Check:** `nvest doctor` reports the mode, accounts, email, billing and AI status. In cloud mode a missing email service shows as an error.
 5. **Operate:** `nvest users list | set-plan <email> pro | set-role <email> admin | set-password <email>` for support and comps. `nvest sync` (or `serve --sync-every`) refreshes data and delivers alerts to every account.
+
+### Free persistent storage (Litestream)
+
+Hosts like Render's free plan wipe the disk whenever the service sleeps or redeploys. The Docker image includes [Litestream](https://litestream.io): set `LITESTREAM_*` and the container restores the SQLite database from S3-compatible storage on boot, then replicates every change within about a second. No code or database changes are needed, and without these variables nothing changes.
+
+With **Backblaze B2** (10 GB free):
+
+1. **Buckets → Create a Bucket** (private), e.g. `nvestpadi-db`. Note its endpoint, e.g. `s3.us-west-004.backblazeb2.com`.
+2. **Application Keys → Add a New Application Key**, restricted to that bucket with read and write access. Copy the `keyID` and `applicationKey` (it's shown only once).
+3. Add these to your host's environment (on Render: the service's **Environment** tab):
+
+   ```ini
+   LITESTREAM_BUCKET=nvestpadi-db
+   LITESTREAM_ENDPOINT=https://s3.us-west-004.backblazeb2.com
+   LITESTREAM_REGION=us-west-004
+   LITESTREAM_ACCESS_KEY_ID=<keyID>
+   LITESTREAM_SECRET_ACCESS_KEY=<applicationKey>
+   ```
+
+**Cloudflare R2** works the same way: create an R2 API token with read and write access, use `https://<account-id>.r2.cloudflarestorage.com` as the endpoint and `auto` as the region. If the credentials are wrong, the container refuses to start rather than running with an empty database.
 
 ## CLI
 
@@ -156,7 +197,7 @@ pnpm nvest ask "How did Nigerian banks trade this week?"
 
 | Command | Description |
 |---|---|
-| `sync [ngx\|us\|all]` | Fetch the latest session, store it, index it and check every account's alerts. `--symbols A,B` `--no-index` `--every MIN` |
+| `sync [ngx\|us\|crypto\|all]` | Fetch the latest session, store it, index it and check every account's alerts. `--backfill` fills missing history; `--symbols A,B` `--no-index` `--every MIN` |
 | `history <SYM>` | Backfill daily history. `--exchange` `--range 1mo…max` |
 | `quote <SYM...>` | Latest stored quotes |
 | `analyze <SYM>` | Full technical report |
@@ -169,7 +210,9 @@ pnpm nvest ask "How did Nigerian banks trade this week?"
 | `search <query>` | Semantic search across everything indexed |
 | `ask "<question>"` | Grounded AI answer with sources |
 | `serve` | Landing page, app and REST API. `--port` `--sync-every MIN` |
-| `doctor` | Check mode, accounts, email, billing, AI provider and Qdrant |
+| `digest [market] [--user email] [--send]` | Preview or send a market or personal digest |
+| `bots setup` | Register Telegram commands and Discord slash commands |
+| `doctor` | Check mode, accounts, email, billing, bots, digests, AI provider and Qdrant |
 
 ## Configuration
 
@@ -184,7 +227,12 @@ Every variable is optional, and [`.env.example`](.env.example) documents each on
 | `ALLOW_SIGNUP` | mode default | Force sign-up open (`true`) or closed (`false`) |
 | `RESEND_API_KEY` + `EMAIL_FROM` | — | Transactional email |
 | `PAYSTACK_SECRET_KEY` + `PAYSTACK_PLAN_CODE` | — | Pro subscriptions (cloud mode) |
-| `TELEGRAM_BOT_TOKEN` | — | Lets users receive alerts on Telegram |
+| `TELEGRAM_BOT_TOKEN` | — | The Telegram bot (personal alerts and digests, commands) |
+| `TELEGRAM_CHAT_ID` / `TELEGRAM_WEBHOOK_SECRET` | — | Broadcast chat for market digests · webhook mode in production |
+| `DISCORD_WEBHOOK_URL` | — | Channel for market digests |
+| `DISCORD_APPLICATION_ID` + `DISCORD_PUBLIC_KEY` (+ `DISCORD_BOT_TOKEN`) | — | Slash commands via the interactions endpoint |
+| `DAILY_DIGEST` | `true` | Market and personal digests while `serve` runs |
+| `COINGECKO_API_KEY` | — | Optional free demo key for higher crypto rate limits |
 | `AI_PROVIDER` / `AI_API_KEY` | — | `openai` or `gemini`; enables Ask, search and ingest |
 | `AI_CHAT_MODEL` / `AI_EMBEDDING_MODEL` / `AI_EMBEDDING_DIMENSIONS` | per provider | Model overrides |
 | `QDRANT_URL` / `QDRANT_API_KEY` / `QDRANT_COLLECTION` | — / — / `nvestpadi` | Vector store for the research library |
@@ -219,9 +267,12 @@ curl -H "Authorization: Bearer nvp_…" https://app.yourdomain.com/api/watchlist
 | GET | `/api/market` · `/api/screen` · `/api/securities` · `/api/securities/:exchange/:symbol` | user | Market data, screener, search, report |
 | GET · POST · DELETE | `/api/watchlist` · `/:exchange/:symbol` | user | Watchlist |
 | GET · POST · DELETE | `/api/alerts` · `/:id` · POST `/:id/rearm` | user | Alerts |
+| GET · POST · PUT · DELETE | `/api/portfolio` · `/:id` | user | Portfolio positions with P&L (adding an existing symbol averages the cost) |
+| POST · DELETE | `/api/account/telegram/link` · `/api/account/telegram` | user | One-time Telegram deep link · disconnect |
 | POST | `/api/ask` · GET `/api/search?q=` | user | Grounded AI answer (metered) · semantic search |
 | POST | `/api/billing/checkout` · `/portal` | user | Paystack checkout / manage-subscription link |
 | POST | `/api/billing/webhook` | signature | Paystack events |
+| POST | `/api/integrations/telegram` · `/api/integrations/discord` | secret · Ed25519 | Bot updates and slash commands |
 | POST · GET | `/api/admin/sync` · `/api/admin/overview` | admin | Trigger a sync · user and data stats |
 
 Errors are JSON: `{"error": "human message", "code": "unauthorized" | "forbidden" | "plan_limit" | "invalid_input" | …}`.
@@ -249,8 +300,9 @@ SQLite is the source of truth for prices, accounts and user data. Qdrant only st
 
 ## Data sources & limitations
 
-- **NGX**: the daily board comes from NGX's public statistics API, and company names from afx.kwayisi.org. Public NGX history covers only about the last 10 sessions, so keep `serve --sync-every` running (or `sync` daily) to build the longer history that RSI, MACD and moving averages need.
-- **US**: Yahoo Finance's public chart API. It's end-of-day or delayed and occasionally rate-limited; requests are retried with backoff.
+- **NGX**: the daily board (OHLC, volume, value, sector) comes from NGX's public statistics API. Company names and up to 2 years of daily closes come from afx.kwayisi.org and are backfilled automatically, so every indicator works from day one. Historical bars are close-only; full OHLC accumulates from daily syncs.
+- **US**: prices and the listing venue (NYSE, Nasdaq…) from Yahoo Finance's public chart API; sector, industry and market cap from Nasdaq's public screener, refreshed daily. End-of-day or delayed, occasionally rate-limited; requests retry with backoff.
+- **Crypto**: CoinGecko's public API — the top 100 coins by market cap, with a rolling 24-hour change and a year of daily closes fetched on demand. Without a key the rate limit is low, so history backfills slowly; `COINGECKO_API_KEY` helps.
 - These are unofficial public endpoints and may change without notice. A commercial deployment should license its market data.
 
 > **Disclaimer:** nVestPadi is a research and education tool. Nothing it produces is investment advice. The bundled [Terms](public/terms.html) and [Privacy Policy](public/privacy.html) are a starting point; have them reviewed before you operate a hosted service.

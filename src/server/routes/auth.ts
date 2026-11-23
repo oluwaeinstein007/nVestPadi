@@ -2,11 +2,11 @@
 import { z } from "zod";
 import type { App } from "../../app.js";
 import { ValidationError } from "../../lib/errors.js";
+import { rateLimiter } from "../../lib/rateLimit.js";
 import { toPublicUser } from "../../services/accountService.js";
 import { type ClientMeta, SESSION_TTL_SECONDS } from "../../services/authService.js";
 import { PLANS } from "../../services/plans.js";
 import { type RequestContext, sessionCookie } from "../http.js";
-import { rateLimiter } from "../rateLimit.js";
 import type { Router } from "../router.js";
 import { emailSchema } from "./shared.js";
 

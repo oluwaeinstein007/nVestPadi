@@ -4,10 +4,10 @@ import { SCREEN_SORTS } from "../../analysis/market.js";
 import type { App } from "../../app.js";
 import { ConflictError, UnauthorizedError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
-import { EXCHANGES, type Exchange } from "../../markets/types.js";
+import { rateLimiter } from "../../lib/rateLimit.js";
+import { CURRENCY, EXCHANGES, type Exchange, MARKET_NAMES } from "../../markets/types.js";
 import { ALERT_CONDITIONS } from "../../services/alertService.js";
 import { VERSION } from "../../version.js";
-import { rateLimiter } from "../rateLimit.js";
 import type { Router } from "../router.js";
 import { exchangeSchema } from "./shared.js";
 
@@ -16,7 +16,16 @@ export function platformRoutes(r: Router, app: App) {
 	let syncing: Promise<unknown> | null = null;
 
 	// -- System --------------------------------------------------------------------------
-	r.get("/api/health", () => ({ status: "ok" }), { access: "public" });
+	const startedAt = Date.now();
+	// Liveness + readiness: fails (500) if the database can't be queried.
+	r.get(
+		"/api/health",
+		() => {
+			app.db.ping();
+			return { status: "ok", version: VERSION, uptimeSeconds: Math.round((Date.now() - startedAt) / 1000) };
+		},
+		{ access: "public" },
+	);
 	r.get("/api/status", () => ({
 		version: VERSION,
 		mode: app.config.mode,
@@ -26,6 +35,7 @@ export function platformRoutes(r: Router, app: App) {
 			billing: app.billing.enabled,
 		},
 		data: { lastPriceDate: app.db.stats().lastPriceDate },
+		markets: EXCHANGES.map((id) => ({ id, name: MARKET_NAMES[id], currency: CURRENCY[id] })),
 		alertConditions: ALERT_CONDITIONS,
 		screenSorts: SCREEN_SORTS,
 	}));

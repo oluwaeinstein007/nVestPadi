@@ -8,6 +8,7 @@
  *   form post) must come from the same origin — a CSRF defence on top of SameSite.
  * - Routes are private unless they opt in to `access: "public"`.
  */
+import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { z } from "zod";
 import type { App } from "../app.js";
@@ -29,6 +30,7 @@ import {
 import { Router, authorize } from "./router.js";
 import { accountRoutes } from "./routes/account.js";
 import { authRoutes } from "./routes/auth.js";
+import { integrationRoutes } from "./routes/integrations.js";
 import { marketRoutes } from "./routes/market.js";
 import { platformRoutes } from "./routes/platform.js";
 import { StaticSite } from "./static.js";
@@ -43,6 +45,7 @@ export function createRequestHandler(app: App) {
 	accountRoutes(router, app);
 	marketRoutes(router, app);
 	platformRoutes(router, app);
+	integrationRoutes(router, app);
 	const site = new StaticSite();
 	const { trustProxy } = app.config.server;
 	const appOrigin = new URL(app.config.appUrl).host;
@@ -78,6 +81,10 @@ export function createRequestHandler(app: App) {
 		const started = Date.now();
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const method = req.method ?? "GET";
+		// Correlates a client report or proxy log line with our logs.
+		const incoming = req.headers["x-request-id"];
+		const requestId = typeof incoming === "string" && /^[\w-]{8,64}$/.test(incoming) ? incoming : randomUUID();
+		res.setHeader("X-Request-Id", requestId);
 		res.setHeader("X-Content-Type-Options", "nosniff");
 		res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
 		res.setHeader("X-Frame-Options", "DENY");
@@ -129,8 +136,9 @@ export function createRequestHandler(app: App) {
 			sendJson(res, 200, result ?? null);
 		} catch (err) {
 			const { status, code, message } = toProblem(err, app.config.env === "production");
-			if (status >= 500 && status !== 503)
-				logger.error("request failed", { path: url.pathname, error: errorMessage(err) });
+			if (status >= 500 && status !== 503) {
+				logger.error("request failed", { requestId, method, path: url.pathname, error: errorMessage(err) });
+			}
 			sendJson(res, status, { error: message, code });
 		} finally {
 			if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {

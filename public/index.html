@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="color-scheme" content="light dark" />
-		<title>nVestPadi — AI research desk for Nigerian &amp; US stocks</title>
+		<title>nVestPadi — AI research desk for Nigerian stocks, US stocks &amp; crypto</title>
 		<link rel="canonical" href="/" />
 		<meta
 			name="description"
@@ -50,11 +50,12 @@
 			<!-- Hero -->
 			<section class="hero">
 				<div class="container hero-copy">
-					<p class="eyebrow"><span class="dot"></span> NGX + US equities · Free to start</p>
-					<h1>Your AI research desk for <span class="accent">Nigerian</span> and US stocks.</h1>
+					<p class="eyebrow"><span class="dot"></span> NGX · US stocks · Crypto · Free to start</p>
+					<h1>Your AI research desk for <span class="accent">Nigerian</span> stocks, US stocks and crypto.</h1>
 					<p class="lead">
-						nVestPadi brings the full NGX daily board and US equities into one place, explains every stock in plain English,
-						screens for setups, alerts you by email or Telegram, and answers your questions with sources you can check.
+						nVestPadi brings the full NGX board, NYSE and Nasdaq leaders and the top 100 coins into one place. It explains every
+						asset in plain English, tracks your portfolio, sends alerts and a daily digest to email or Telegram, and answers your
+						questions with sources you can check.
 					</p>
 					<div class="cta-row">
 						<a class="btn btn-primary btn-lg" href="/signup" data-guest>
@@ -104,8 +105,8 @@
 			<!-- Stats -->
 			<section class="stats" aria-label="At a glance">
 				<div class="container stats-grid">
-					<div><b>~150</b><span>NGX equities synced every session</span></div>
-					<div><b>9</b><span>technical indicators per stock</span></div>
+					<div><b>~150</b><span>NGX equities with up to 2 years of history</span></div>
+					<div><b>100</b><span>top coins, alongside NYSE &amp; Nasdaq</span></div>
 					<div><b>7</b><span>alert types, by email, Telegram or Discord</span></div>
 					<div><b>₦0</b><span>to get started</span></div>
 				</div>
@@ -117,7 +118,7 @@
 					<p class="kicker">Features</p>
 					<h2>Everything you check before you trade, in one place.</h2>
 					<p class="section-lead">
-						Built for the Nigerian market first, where data is scattered and tools are scarce. It covers the US too.
+						Built for the Nigerian market first, where data is scattered and tools are scarce. US stocks and crypto sit right alongside it.
 					</p>
 
 					<div class="features">
@@ -150,6 +151,21 @@
 							<div class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></svg></div>
 							<h3>A research library behind every answer</h3>
 							<p>Annual reports, broker notes and market news are indexed so answers can quote them. Self-hosting? Add your own PDFs and websites.</p>
+						</article>
+						<article class="feature">
+							<div class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18" /><path d="M7 15l4-4 3 3 5-6" /></svg></div>
+							<h3>Your portfolio, marked to market</h3>
+							<p>Log what you own in naira and dollars. See today's gain, total return and each position's weight, updated every session.</p>
+						</article>
+						<article class="feature">
+							<div class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4 20-7Z" /></svg></div>
+							<h3>A bot in your Telegram</h3>
+							<p>Connect in one tap for alerts and a daily wrap-up of your watchlist and portfolio. Ask <code>/quote</code>, <code>/portfolio</code> or any question right in the chat.</p>
+						</article>
+						<article class="feature">
+							<div class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg></div>
+							<h3>Crypto, analyzed the same way</h3>
+							<p>The top 100 coins with a year of daily history, the same indicators and signals as stocks, and a heatmap of what's moving.</p>
 						</article>
 					</div>
 				</div>
@@ -243,10 +259,12 @@
 							<p class="price"><b>₦0</b></p>
 							<p class="muted">Follow the market and a handful of stocks.</p>
 							<ul class="checks">
-								<li>Full NGX &amp; US market dashboard</li>
+								<li>NGX, US &amp; crypto dashboards</li>
 								<li>Technical reports &amp; screener</li>
 								<li>10 watchlist stocks</li>
+								<li>10 portfolio positions</li>
 								<li>3 active alerts by email or Telegram</li>
+								<li>Daily digest &amp; Telegram bot</li>
 								<li>5 AI questions a day</li>
 							</ul>
 							<a class="btn btn-ghost btn-lg btn-block" href="/signup">Create free account</a>
@@ -259,6 +277,7 @@
 							<ul class="checks">
 								<li>Everything in Free</li>
 								<li>100 watchlist stocks</li>
+								<li>200 portfolio positions</li>
 								<li>50 active alerts</li>
 								<li>Discord alerts for your trading group</li>
 								<li>100 AI questions a day</li>
@@ -357,8 +376,12 @@ pnpm nvest market</code></pre>
 						<p>No. nVestPadi is a research tool. It summarizes market data and documents to help you form your own view, but it doesn't know your goals or circumstances. Speak to a licensed adviser before you invest.</p>
 					</details>
 					<details>
+						<summary>Which markets do you cover?</summary>
+						<p>Every equity on the Nigerian Exchange, the largest US stocks on the NYSE and Nasdaq (each labelled with its exchange), and the top 100 cryptocurrencies by market cap.</p>
+					</details>
+					<details>
 						<summary>Where does the data come from, and how fresh is it?</summary>
-						<p>NGX prices come from the exchange's public daily board, and US prices from Yahoo Finance. Data is end-of-day: we sync after each trading session, then check every alert.</p>
+						<p>NGX prices come from the exchange's public daily board, with history from afx.kwayisi.org; US prices from Yahoo Finance, with sectors from Nasdaq; crypto from CoinGecko. Stocks are end-of-day and refreshed after each session; crypto shows a rolling 24-hour change.</p>
 					</details>
 					<details>
 						<summary>Can the AI make up numbers?</summary>

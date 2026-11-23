@@ -67,18 +67,21 @@ export class AccountService {
 			},
 			limits: {
 				watchlist: finite(limits.watchlist),
+				holdings: finite(limits.holdings),
 				activeAlerts: finite(limits.activeAlerts),
 				aiQuestionsPerDay: finite(limits.aiQuestionsPerDay),
 				discordAlerts: limits.discordAlerts,
 			},
 			usage: {
 				watchlist: this.db.watchlist.count(user.id),
+				holdings: this.db.holdings.count(user.id),
 				activeAlerts: this.db.alerts.countActive(user.id),
 				aiQuestionsToday: this.db.usage.get(user.id, "ai_questions"),
 			},
 			notifications: {
 				emailAlerts: user.emailAlerts,
-				telegramChatId: user.telegramChatId,
+				dailyDigest: user.dailyDigest,
+				telegramLinked: Boolean(user.telegramChatId),
 				discordWebhookUrl: user.discordWebhookUrl,
 				activeChannels: this.notifier.channelsFor(user),
 				telegramAvailable: this.notifier.telegramAvailable,
@@ -95,13 +98,9 @@ export class AccountService {
 
 	updateNotifications(
 		user: User,
-		patch: { emailAlerts?: boolean; telegramChatId?: string | null; discordWebhookUrl?: string | null },
+		patch: { emailAlerts?: boolean; dailyDigest?: boolean; discordWebhookUrl?: string | null },
 	): User {
-		const telegram = patch.telegramChatId?.trim() || null;
 		const discord = patch.discordWebhookUrl?.trim() || null;
-		if (telegram && !/^-?\d{3,20}$|^@[\w]{5,32}$/.test(telegram)) {
-			throw new ValidationError("Telegram chat ID should be a number like 123456789 (or @channelname).");
-		}
 		if (discord && !DISCORD_WEBHOOK.test(discord)) {
 			throw new ValidationError("That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…).");
 		}
@@ -110,14 +109,14 @@ export class AccountService {
 		}
 		return this.db.users.update(user.id, {
 			emailAlerts: patch.emailAlerts,
-			telegramChatId: patch.telegramChatId === undefined ? undefined : telegram,
+			dailyDigest: patch.dailyDigest,
 			discordWebhookUrl: patch.discordWebhookUrl === undefined ? undefined : discord,
 		});
 	}
 
 	async testNotifications(user: User): Promise<DeliveryResult[]> {
 		if (this.notifier.channelsFor(user).length === 0) {
-			throw new ValidationError("No delivery channel is active yet. Verify your email or add Telegram first.");
+			throw new ValidationError("No delivery channel is active yet. Verify your email or connect Telegram first.");
 		}
 		return this.notifier.deliver(user, ["🔔 Test alert from nVestPadi — your alerts will arrive here."], {
 			test: true,

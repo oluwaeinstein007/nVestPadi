@@ -3,8 +3,8 @@
  * `access: "public"` to be reachable without signing in.
  */
 import { ForbiddenError, UnauthorizedError } from "../lib/errors.js";
+import type { Limiter } from "../lib/rateLimit.js";
 import type { RequestContext } from "./http.js";
-import type { Limiter } from "./rateLimit.js";
 
 export type Access = "public" | "user" | "admin";
 export type Handler = (ctx: RequestContext) => unknown | Promise<unknown>;

@@ -1,10 +1,12 @@
 /**
- * Per-user alert delivery. Every account can get email (once verified);
- * Telegram works when the server has a bot token and the user has set a chat
- * ID; Discord webhooks depend on the plan.
+ * Per-user delivery of alerts and personal digests. Every account can get
+ * email (once verified); Telegram works once the user links the server's bot
+ * from Settings; Discord webhooks depend on the plan. Messages use light
+ * markup (**bold**), converted per channel.
  */
 import type { AppMode } from "../config.js";
-import { postJson } from "../lib/http.js";
+import { postDiscordWebhook } from "../integrations/discord.js";
+import { type TelegramClient, toTelegramHtml } from "../integrations/telegram.js";
 import { errorMessage, logger } from "../lib/logger.js";
 import type { User } from "../storage/repositories/users.js";
 import * as emails from "./emails.js";
@@ -22,13 +24,13 @@ export interface DeliveryResult {
 export class Notifier {
 	constructor(
 		private readonly mailer: Mailer,
-		private readonly telegramBotToken: string | null,
+		private readonly telegram: TelegramClient | null,
 		private readonly mode: AppMode,
 		private readonly appUrl: string,
 	) {}
 
 	get telegramAvailable(): boolean {
-		return this.telegramBotToken !== null;
+		return this.telegram !== null;
 	}
 
 	get emailDelivers(): boolean {
@@ -38,13 +40,20 @@ export class Notifier {
 	channelsFor(user: User): Channel[] {
 		const channels: Channel[] = [];
 		if (user.emailAlerts && user.emailVerifiedAt && this.mailer.delivers) channels.push("email");
-		if (this.telegramBotToken && user.telegramChatId) channels.push("telegram");
+		if (this.telegram && user.telegramChatId) channels.push("telegram");
 		if (user.discordWebhookUrl && limitsFor(user, this.mode).discordAlerts) channels.push("discord");
 		return channels;
 	}
 
-	/** Send alert messages over every channel the user has enabled. Failures are reported, never thrown. */
-	async deliver(user: User, messages: string[], options: { test?: boolean } = {}): Promise<DeliveryResult[]> {
+	/**
+	 * Send messages over every channel the user has enabled. `subject` switches the
+	 * email from an alert digest to a general update. Failures are reported, never thrown.
+	 */
+	async deliver(
+		user: User,
+		messages: string[],
+		options: { test?: boolean; subject?: string } = {},
+	): Promise<DeliveryResult[]> {
 		const text = messages.join("\n\n");
 		const jobs = this.channelsFor(user).map(async (channel): Promise<DeliveryResult> => {
 			try {
@@ -52,16 +61,14 @@ export class Notifier {
 					await this.mailer.send(
 						options.test
 							? emails.testNotification(user.email, user.name, `${this.appUrl}/app/settings`)
-							: emails.alertDigest(user.email, user.name, messages, `${this.appUrl}/app`),
+							: options.subject
+								? emails.update(user.email, user.name, options.subject, messages, `${this.appUrl}/app`)
+								: emails.alertDigest(user.email, user.name, messages, `${this.appUrl}/app`),
 					);
 				} else if (channel === "telegram") {
-					await postJson(`https://api.telegram.org/bot${this.telegramBotToken}/sendMessage`, {
-						chat_id: user.telegramChatId,
-						text,
-						disable_web_page_preview: true,
-					});
+					await this.telegram?.sendMessage(user.telegramChatId as string, toTelegramHtml(text));
 				} else {
-					await postJson(user.discordWebhookUrl as string, { content: text.slice(0, 2000) });
+					await postDiscordWebhook(user.discordWebhookUrl as string, text);
 				}
 				return { channel, ok: true };
 			} catch (err) {

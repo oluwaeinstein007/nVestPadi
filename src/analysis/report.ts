@@ -30,6 +30,8 @@ export interface SecurityReport {
 }
 
 const HORIZONS = { "1W": 5, "1M": 21, "3M": 63, "6M": 126, "1Y": 252 } as const;
+/** Crypto trades every day, so horizons count calendar days. */
+const CRYPTO_HORIZONS: Record<keyof typeof HORIZONS, number> = { "1W": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365 };
 
 const last = (series: number[]): number | null => {
 	const v = series[series.length - 1];
@@ -49,16 +51,18 @@ export function buildReport(security: Security, bars: PriceBar[]): SecurityRepor
 	const price = latest.close;
 
 	const performance: SecurityReport["performance"] = {};
-	for (const [label, offset] of Object.entries(HORIZONS)) {
+	const horizons = security.exchange === "CRYPTO" ? CRYPTO_HORIZONS : HORIZONS;
+	const yearBars = horizons["1Y"];
+	for (const [label, offset] of Object.entries(horizons)) {
 		// A "1y" range from data providers is ~250 sessions, so accept a slightly short window.
 		const idx = closes.length - 1 - offset;
 		const base = idx >= 0 ? closes[idx] : closes.length - 1 >= offset * 0.95 ? closes[0] : undefined;
 		if (base) performance[label as keyof typeof HORIZONS] = round(((price - base) / base) * 100, 2);
 	}
 
-	const yearCloses = closes.slice(-252);
-	const yearHighs = highs.slice(-252);
-	const yearLows = lows.slice(-252);
+	const yearCloses = closes.slice(-yearBars);
+	const yearHighs = highs.slice(-yearBars);
+	const yearLows = lows.slice(-yearBars);
 	const high = Math.max(...yearHighs, ...yearCloses);
 	const low = Math.min(...yearLows, ...yearCloses);
 	const range52w =
@@ -156,7 +160,7 @@ function describe(r: SecurityReport): string[] {
 	if (i.sma200 !== null) out.push(`Price is ${latest.close >= i.sma200 ? "above" : "below"} the 200-day average.`);
 	if (r.signal)
 		out.push(`Recent ${r.signal.strength} ${r.signal.signal} signal on ${r.signal.date}: ${r.signal.reason}.`);
-	if (r.bars < 26) out.push(`Only ${r.bars} sessions of history — run \`nvest sync\` daily to build more.`);
+	if (r.bars < 26) out.push(`Only ${r.bars} sessions of history so far — more indicators appear as history builds up.`);
 	return out;
 }
 

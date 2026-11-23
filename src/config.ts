@@ -52,7 +52,17 @@ export interface Config {
 	};
 	email: { resendApiKey: string; from: string } | null;
 	billing: { paystackSecretKey: string; planCode: string } | null;
-	telegramBotToken: string | null;
+	/** Server-wide Telegram bot: answers commands and posts daily market digests to `broadcastChatId`. */
+	telegram: { botToken: string; broadcastChatId: string | null; webhookSecret: string | null } | null;
+	discord: {
+		/** Channel webhook for daily market digests. */
+		broadcastWebhookUrl: string | null;
+		/** Slash-command app (interactions endpoint); null when not configured. */
+		app: { applicationId: string; publicKey: string; botToken: string | null } | null;
+	};
+	/** Send daily market digests to broadcast channels and personal digests to users. */
+	digests: boolean;
+	coingeckoApiKey: string | null;
 	/** Non-fatal problems, e.g. variables from older versions that are now ignored. */
 	warnings: string[];
 }
@@ -135,6 +145,20 @@ const EnvSchema = z
 		PAYSTACK_PLAN_CODE: z.string().optional(),
 
 		TELEGRAM_BOT_TOKEN: z.string().optional(),
+		TELEGRAM_CHAT_ID: z.string().optional(),
+		TELEGRAM_WEBHOOK_SECRET: z
+			.string()
+			.regex(/^[\w-]{16,256}$/, "16–256 letters, digits, '_' or '-'")
+			.optional(),
+		DISCORD_WEBHOOK_URL: z.string().url().optional(),
+		DISCORD_APPLICATION_ID: z.string().regex(/^\d+$/, "numeric application id").optional(),
+		DISCORD_PUBLIC_KEY: z
+			.string()
+			.regex(/^[0-9a-f]{64}$/i, "64 hex characters")
+			.optional(),
+		DISCORD_BOT_TOKEN: z.string().optional(),
+		DAILY_DIGEST: bool.default("true"),
+		COINGECKO_API_KEY: z.string().optional(),
 	})
 	.superRefine((env, ctx) => {
 		if (env.AI_PROVIDER && !env.AI_API_KEY) {
@@ -158,6 +182,16 @@ const EnvSchema = z
 				message: 'required when RESEND_API_KEY is set, e.g. "nVestPadi <hello@yourdomain.com>"',
 			});
 		}
+		if (env.TELEGRAM_CHAT_ID && !env.TELEGRAM_BOT_TOKEN) {
+			ctx.addIssue({ code: "custom", path: ["TELEGRAM_BOT_TOKEN"], message: "required when TELEGRAM_CHAT_ID is set" });
+		}
+		if (Boolean(env.DISCORD_APPLICATION_ID) !== Boolean(env.DISCORD_PUBLIC_KEY)) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["DISCORD_PUBLIC_KEY"],
+				message: "DISCORD_APPLICATION_ID and DISCORD_PUBLIC_KEY must be set together",
+			});
+		}
 		if (env.APP_MODE === "cloud" && env.NODE_ENV === "production" && !env.APP_URL) {
 			ctx.addIssue({ code: "custom", path: ["APP_URL"], message: "required in production cloud mode" });
 		}
@@ -166,8 +200,6 @@ const EnvSchema = z
 /** Variables from v2.0 that no longer do anything, with what replaced them. */
 const REMOVED_VARIABLES: Record<string, string> = {
 	API_KEY: "sign in with an account; create personal API tokens under Settings → API tokens",
-	TELEGRAM_CHAT_ID: "each user now sets their own Telegram chat ID under Settings → Notifications",
-	DISCORD_WEBHOOK_URL: "each user now sets their own Discord webhook under Settings → Notifications",
 };
 
 export class ConfigError extends Error {
@@ -236,7 +268,26 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 			env.PAYSTACK_SECRET_KEY && env.PAYSTACK_PLAN_CODE
 				? { paystackSecretKey: env.PAYSTACK_SECRET_KEY, planCode: env.PAYSTACK_PLAN_CODE }
 				: null,
-		telegramBotToken: env.TELEGRAM_BOT_TOKEN ?? null,
+		telegram: env.TELEGRAM_BOT_TOKEN
+			? {
+					botToken: env.TELEGRAM_BOT_TOKEN,
+					broadcastChatId: env.TELEGRAM_CHAT_ID ?? null,
+					webhookSecret: env.TELEGRAM_WEBHOOK_SECRET ?? null,
+				}
+			: null,
+		discord: {
+			broadcastWebhookUrl: env.DISCORD_WEBHOOK_URL ?? null,
+			app:
+				env.DISCORD_APPLICATION_ID && env.DISCORD_PUBLIC_KEY
+					? {
+							applicationId: env.DISCORD_APPLICATION_ID,
+							publicKey: env.DISCORD_PUBLIC_KEY,
+							botToken: env.DISCORD_BOT_TOKEN ?? null,
+						}
+					: null,
+		},
+		digests: env.DAILY_DIGEST,
+		coingeckoApiKey: env.COINGECKO_API_KEY ?? null,
 		warnings,
 	};
 }

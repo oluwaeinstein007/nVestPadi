@@ -6,6 +6,7 @@ import { KnowledgeBase } from "../src/services/knowledgeBase.js";
 import { MarketService } from "../src/services/marketService.js";
 import type { SearchHit, VectorPoint, VectorStore } from "../src/storage/vectorStore.js";
 import { memoryDb, security, seed } from "./helpers.js";
+import { marketOptions } from "./helpers.js";
 
 class StubAI implements AIProvider {
 	readonly name = "stub";
@@ -34,7 +35,7 @@ class StubVectors {
 	}
 }
 
-const closes = Array.from({ length: 40 }, (_, i) => 100 + i);
+const closes = Array.from({ length: 70 }, (_, i) => 100 + i);
 
 function setup() {
 	const db = memoryDb();
@@ -42,7 +43,7 @@ function setup() {
 	const ai = new StubAI();
 	const vectors = new StubVectors();
 	const kb = new KnowledgeBase(db, ai, vectors as unknown as VectorStore);
-	const insights = new InsightService(db, ai, kb, new MarketService(db, kb, []));
+	const insights = new InsightService(db, ai, kb, new MarketService(db, kb, marketOptions));
 	return { db, ai, vectors, kb, insights };
 }
 
@@ -110,7 +111,9 @@ describe("ask", () => {
 		const db = memoryDb();
 		const ai = new StubAI();
 		const kb = new KnowledgeBase(db, ai, null);
-		const answer = await new InsightService(db, ai, kb, new MarketService(db, kb, [])).ask("What happened today?");
+		const answer = await new InsightService(db, ai, kb, new MarketService(db, kb, marketOptions)).ask(
+			"What happened today?",
+		);
 		assert.match(answer.answer, /nvest sync/);
 		assert.equal(ai.lastPrompt.length, 0);
 	});
