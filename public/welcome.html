@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="robots" content="noindex" />
+		<title>Welcome · nVestPadi</title>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/landing.css" />
+		<script type="module" src="/js/welcome.js"></script>
+	</head>
+	<body class="auth-page" data-auth="required">
+		<main id="main" class="onboard">
+			<div class="auth-top">
+				<a class="brand" href="/"><img src="/favicon.svg" alt="" width="24" height="24" /><span>nVest<strong>Padi</strong></span></a>
+				<button id="theme" class="icon-btn" type="button" aria-label="Toggle colour theme">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" /></svg>
+				</button>
+			</div>
+
+			<ol class="progress" aria-label="Setup progress">
+				<li data-step="1" aria-current="step">Market</li>
+				<li data-step="2">Watchlist</li>
+				<li data-step="3">Alerts</li>
+			</ol>
+
+			<form class="auth-card onboard-card" id="onboard">
+				<section data-step="1">
+					<h1 id="greeting">Welcome!</h1>
+					<p class="muted">Which market do you follow most? You can switch any time.</p>
+					<div class="choice-grid">
+						<label class="choice">
+							<input type="radio" name="exchange" value="NGX" checked />
+							<span><b>🇳🇬 Nigerian Exchange</b><small>~150 NGX equities, updated every session</small></span>
+						</label>
+						<label class="choice">
+							<input type="radio" name="exchange" value="US" />
+							<span><b>🇺🇸 US equities</b><small>Large-cap US stocks via Yahoo Finance</small></span>
+						</label>
+					</div>
+				</section>
+
+				<section data-step="2" hidden>
+					<h1>Pick a few stocks to watch</h1>
+					<p class="muted">Tap to add. We'll show them on your dashboard with live trends. <span id="watch-limit"></span></p>
+					<input class="onboard-search" id="pick-search" type="search" placeholder="Search by ticker or company…" autocomplete="off" aria-label="Search stocks" />
+					<div class="pick-grid" id="picks" role="group" aria-label="Suggested stocks"></div>
+				</section>
+
+				<section data-step="3" hidden>
+					<h1>Where should alerts go?</h1>
+					<p class="muted">We check your alerts after every market sync and send one message when something triggers.</p>
+					<div class="channel" id="email-channel"></div>
+					<label class="auth-field" id="telegram-field" hidden>
+						<span>Telegram chat ID <small class="muted">(optional)</small></span>
+						<input name="telegramChatId" inputmode="numeric" placeholder="e.g. 123456789" autocomplete="off" />
+						<small class="muted">Message the server's bot, then get your ID from @userinfobot.</small>
+					</label>
+				</section>
+
+				<p class="auth-error" role="alert" hidden></p>
+				<div class="onboard-actions">
+					<button class="btn btn-ghost" type="button" id="back" hidden>Back</button>
+					<button class="btn btn-ghost" type="button" id="skip">Skip setup</button>
+					<button class="btn btn-primary btn-lg" type="submit" id="next">Continue</button>
+				</div>
+			</form>
+		</main>
+	</body>
+</html>

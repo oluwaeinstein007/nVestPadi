@@ -1,0 +1,39 @@
+# One-click deploy to Render (https://render.com/deploy) — runs nVestPadi as a hosted (cloud-mode)
+# service with a persistent disk for SQLite. Fill in the `sync: false` values in the dashboard.
+services:
+  - type: web
+    name: nvestpadi
+    runtime: docker
+    plan: starter # a persistent disk needs a paid instance
+    healthCheckPath: /api/health
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: APP_MODE
+        value: cloud
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "true"
+      - key: APP_URL
+        sync: false # e.g. https://nvestpadi.onrender.com or your custom domain
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_PLAN_CODE
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: AI_PROVIDER
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false

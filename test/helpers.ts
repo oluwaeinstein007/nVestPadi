@@ -1,5 +1,7 @@
 import type { PriceBar, Security } from "../src/markets/types.js";
+import type { EmailMessage, Mailer } from "../src/services/mailer.js";
 import { Database } from "../src/storage/database.js";
+import type { User } from "../src/storage/repositories/users.js";
 
 export function memoryDb(): Database {
 	return new Database(":memory:");
@@ -43,6 +45,37 @@ export function security(
 }
 
 export function seed(db: Database, entries: { s: Security; closes: number[] }[]) {
-	db.upsertSecurities(entries.map((e) => e.s));
-	for (const e of entries) db.upsertPrices(makeBars(e.s.symbol, e.closes, e.s.exchange));
+	db.market.upsertSecurities(entries.map((e) => e.s));
+	for (const e of entries) db.market.upsertPrices(makeBars(e.s.symbol, e.closes, e.s.exchange));
+}
+
+/** Insert a user directly (no password hashing), for service-level tests. */
+export function user(
+	db: Database,
+	overrides: { email?: string; plan?: "free" | "pro"; role?: "admin" | "member" } = {},
+): User {
+	return db.users.create({
+		email: overrides.email ?? `u${db.users.count() + 1}@example.com`,
+		name: "Test User",
+		passwordHash: "x",
+		role: overrides.role,
+		plan: overrides.plan,
+		emailVerified: true,
+	});
+}
+
+/** Captures outgoing email so tests can follow verification/reset links. */
+export class TestMailer implements Mailer {
+	readonly name = "test";
+	readonly delivers = true;
+	sent: EmailMessage[] = [];
+	async send(message: EmailMessage) {
+		this.sent.push(message);
+	}
+	/** The token from the most recent email's link. */
+	lastToken(): string {
+		const match = /token=([\w%-]+)/.exec(this.sent.at(-1)?.text ?? "");
+		if (!match?.[1]) throw new Error("no token in last email");
+		return decodeURIComponent(match[1]);
+	}
 }

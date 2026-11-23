@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="robots" content="noindex" />
+		<title>Sign in · nVestPadi</title>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/landing.css" />
+		<script type="module" src="/js/auth.js"></script>
+	</head>
+	<body class="auth-page">
+		<a class="skip" href="#main">Skip to content</a>
+		<div class="auth-shell">
+			<aside class="auth-aside" aria-hidden="true">
+				<a class="brand" href="/"><img src="/favicon.svg" alt="" width="28" height="28" /><span>nVest<strong>Padi</strong></span></a>
+				<div>
+					<h2>Your research desk for Nigerian and US stocks.</h2>
+					<ul class="checks">
+						<li>The full NGX board after every session</li>
+						<li>Plain-English technical reports for any stock</li>
+						<li>Price, RSI and volume alerts by email or Telegram</li>
+						<li>AI answers that cite their sources</li>
+					</ul>
+				</div>
+				<p class="muted small">Information only, not investment advice.</p>
+			</aside>
+
+			<main id="main" class="auth-main">
+				<div class="auth-top">
+					<a class="brand auth-brand-sm" href="/"><img src="/favicon.svg" alt="" width="24" height="24" /><span>nVest<strong>Padi</strong></span></a>
+					<button id="theme" class="icon-btn" type="button" aria-label="Toggle colour theme">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" /></svg>
+					</button>
+				</div>
+				<div class="auth-card" id="view" aria-live="polite">
+					<div class="auth-loading" aria-label="Loading"></div>
+				</div>
+				<p class="auth-legal muted small"><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>
+			</main>
+		</div>
+	</body>
+</html>

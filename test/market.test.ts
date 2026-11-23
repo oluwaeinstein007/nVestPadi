@@ -4,11 +4,13 @@ import { marketOverview, screen } from "../src/analysis/market.js";
 import { buildReport } from "../src/analysis/report.js";
 import { titleCase } from "../src/markets/ngx.js";
 import type { PriceBar } from "../src/markets/types.js";
-import { AlertService, Notifier } from "../src/services/alertService.js";
+import { AlertService } from "../src/services/alertService.js";
 import { InsightService } from "../src/services/insightService.js";
 import { KnowledgeBase } from "../src/services/knowledgeBase.js";
+import { createMailer } from "../src/services/mailer.js";
 import { MarketService } from "../src/services/marketService.js";
-import { makeBars, memoryDb, security, seed } from "./helpers.js";
+import { Notifier } from "../src/services/notifier.js";
+import { makeBars, memoryDb, security, seed, user } from "./helpers.js";
 
 const up = Array.from({ length: 80 }, (_, i) => 100 + i);
 const down = Array.from({ length: 80 }, (_, i) => 200 - i);
@@ -28,19 +30,19 @@ function fixture() {
 describe("database", () => {
 	it("upserts idempotently and returns latest quotes per symbol", () => {
 		const db = fixture();
-		db.upsertPrices(makeBars("GTCO", up)); // re-run is a no-op
-		const quotes = db.latestQuotes("NGX");
+		db.market.upsertPrices(makeBars("GTCO", up)); // re-run is a no-op
+		const quotes = db.market.latestQuotes("NGX");
 		assert.equal(quotes.length, 3);
 		assert.equal(quotes.find((q) => q.symbol === "GTCO")?.close, 179);
-		assert.equal(db.history("NGX", "GTCO").length, 80);
-		assert.deepEqual(db.findExchanges("aapl"), ["US"]);
+		assert.equal(db.market.history("NGX", "GTCO").length, 80);
+		assert.deepEqual(db.market.findExchanges("aapl"), ["US"]);
 	});
 
 	it("keeps richer existing fields when a sparser source upserts the same day", () => {
 		const db = fixture();
 		const last = makeBars("GTCO", up).at(-1) as PriceBar;
-		db.upsertPrices([{ ...last, open: null, high: null, volume: null }]);
-		const bar = db.history("NGX", "GTCO").at(-1);
+		db.market.upsertPrices([{ ...last, open: null, high: null, volume: null }]);
+		const bar = db.market.history("NGX", "GTCO").at(-1);
 		assert.notEqual(bar?.open, null);
 		assert.notEqual(bar?.volume, null);
 	});
@@ -99,27 +101,60 @@ describe("security report", () => {
 	});
 });
 
+const notifier = () => new Notifier(createMailer(null), null, "self-hosted", "http://localhost:3000");
+
 describe("alerts", () => {
-	it("fires once when a condition is met", async () => {
+	it("fires once when a condition is met, scoped to each owner", async () => {
 		const db = fixture();
-		const alerts = new AlertService(db, new Notifier({ telegram: null, discordWebhookUrl: null }));
-		alerts.add({ exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 150 });
-		alerts.add({ exchange: "NGX", symbol: "GTCO", condition: "below", threshold: 10 });
-		alerts.add({ exchange: "NGX", symbol: "ZENITHBANK", condition: "rsi-below", threshold: 30 });
+		const alerts = new AlertService(db, notifier(), "self-hosted");
+		const alice = user(db);
+		const bob = user(db);
+		alerts.add(alice, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 150 });
+		alerts.add(alice, { exchange: "NGX", symbol: "GTCO", condition: "below", threshold: 10 });
+		alerts.add(bob, { exchange: "NGX", symbol: "ZENITHBANK", condition: "rsi-below", threshold: 30 });
 
 		const fired = await alerts.check();
 		assert.deepEqual(
-			fired.map((f) => `${f.alert.symbol}:${f.alert.condition}`),
-			["GTCO:above", "ZENITHBANK:rsi-below"],
+			fired.map((f) => `${f.alert.userId}:${f.alert.symbol}:${f.alert.condition}`),
+			[`${alice.id}:GTCO:above`, `${bob.id}:ZENITHBANK:rsi-below`],
 		);
 		assert.equal((await alerts.check()).length, 0);
-		assert.equal(alerts.list(true).length, 1);
+		assert.equal(alerts.list(alice, true).length, 1);
+		assert.equal(alerts.list(bob).length, 1);
+		assert.equal(alerts.remove(bob, alerts.list(alice)[0]?.id as number), false, "can't delete someone else's alert");
+	});
+
+	it("re-arms a fired alert", async () => {
+		const db = fixture();
+		const alerts = new AlertService(db, notifier(), "self-hosted");
+		const u = user(db);
+		const a = alerts.add(u, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 150 });
+		await alerts.check();
+		assert.equal(alerts.rearm(u, a.id).triggeredAt, null);
+		assert.equal((await alerts.check()).length, 1);
 	});
 
 	it("validates thresholds", () => {
-		const alerts = new AlertService(memoryDb(), new Notifier({ telegram: null, discordWebhookUrl: null }));
-		assert.throws(() => alerts.add({ exchange: "NGX", symbol: "X", condition: "volume-spike", threshold: 0.5 }));
-		assert.throws(() => alerts.add({ exchange: "NGX", symbol: "X", condition: "above", threshold: Number.NaN }));
+		const db = memoryDb();
+		const alerts = new AlertService(db, notifier(), "self-hosted");
+		const u = user(db);
+		assert.throws(() => alerts.add(u, { exchange: "NGX", symbol: "X", condition: "volume-spike", threshold: 0.5 }));
+		assert.throws(() => alerts.add(u, { exchange: "NGX", symbol: "X", condition: "above", threshold: Number.NaN }));
+	});
+
+	it("enforces the plan's active-alert limit in cloud mode", () => {
+		const db = fixture();
+		const alerts = new AlertService(db, notifier(), "cloud");
+		const free = user(db);
+		const pro = user(db, { plan: "pro" });
+		for (let i = 0; i < 3; i++)
+			alerts.add(free, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 200 + i });
+		assert.throws(
+			() => alerts.add(free, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 999 }),
+			(e: Error & { status?: number }) => e.status === 402,
+		);
+		for (let i = 0; i < 4; i++)
+			alerts.add(pro, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 200 + i });
 	});
 });
 

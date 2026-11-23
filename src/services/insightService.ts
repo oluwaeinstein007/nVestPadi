@@ -8,10 +8,11 @@
 import type { AIProvider } from "../ai/provider.js";
 import { marketOverview } from "../analysis/market.js";
 import { reportToText } from "../analysis/report.js";
+import { FeatureUnavailableError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";
 import type { Exchange } from "../markets/types.js";
 import type { Database } from "../storage/database.js";
-import { FeatureUnavailableError, type KnowledgeBase } from "./knowledgeBase.js";
+import type { KnowledgeBase } from "./knowledgeBase.js";
 import type { MarketService } from "./marketService.js";
 
 export interface Source {
@@ -34,7 +35,7 @@ const SYSTEM_PROMPT = `You are nVestPadi, a research assistant for Nigerian Exch
 Rules:
 - Answer ONLY from the numbered context. Never invent prices, dates or figures.
 - Cite every factual claim inline with its context number, e.g. "closed at 1,323 [2]".
-- If the context doesn't cover the question, say so plainly and suggest the nvest command that would fetch it (e.g. "nvest history GTCO", "nvest ingest url <link>").
+- If the context doesn't cover the question, say so plainly and suggest what would help (e.g. opening the stock in nVestPadi to load its history, or adding research documents).
 - Prefer specifics: numbers, percentages, dates. Use NGN for NGX prices and USD for US.
 - Be concise: a direct answer first, then short supporting bullets.
 - You provide information, not personalised investment advice.`;
@@ -61,7 +62,7 @@ export class InsightService {
 				.filter((t) => t === t.toUpperCase() || t.length >= 5)
 				.map((t) => t.toUpperCase()),
 		);
-		for (const s of this.db.allSymbols()) {
+		for (const s of this.db.market.allSymbols()) {
 			const shortName = s.name.replace(NAME_SUFFIX, "").toLowerCase();
 			const byTicker = tokens.has(s.symbol);
 			const byName = shortName.length >= 4 && new RegExp(`\\b${escapeRegex(shortName)}\\b`).test(lower);
@@ -135,7 +136,7 @@ export class InsightService {
 			return {
 				question,
 				answer:
-					"I don't have any data to answer that yet. Run `nvest sync` to load market data, or `nvest ingest url|file` to add research documents.",
+					"I don't have any data to answer that yet. Market data appears after the next sync (self-hosted: run `nvest sync`), and research documents can be added with `nvest ingest`.",
 				sources: [],
 				symbols: [],
 				model: this.ai.chatModel,

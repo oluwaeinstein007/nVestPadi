@@ -33,7 +33,7 @@ export interface MarketOverview {
 
 /** Only quotes from the exchange's most recent session (stale symbols excluded). */
 function currentSession(db: Database, exchange: Exchange): { date: string | null; quotes: Quote[] } {
-	const quotes = db.latestQuotes(exchange);
+	const quotes = db.market.latestQuotes(exchange);
 	const date = quotes.reduce<string | null>((max, q) => (max === null || q.date > max ? q.date : max), null);
 	return { date, quotes: quotes.filter((q) => q.date === date) };
 }
@@ -128,7 +128,7 @@ export function screen(db: Database, options: ScreenOptions): ScreenRow[] {
 
 	if (needsRsi) {
 		rows = rows.map((r) => {
-			const closes = db.history(r.exchange, r.symbol, 120).map((b) => b.close);
+			const closes = db.market.history(r.exchange, r.symbol, 120).map((b) => b.close);
 			const value = rsi(closes, 14).at(-1);
 			return { ...r, rsi14: value === undefined || Number.isNaN(value) ? null : round(value, 1) };
 		});

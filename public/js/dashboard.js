@@ -1,123 +1,33 @@
-// nVestPadi dashboard — vanilla JS, no build step. Talks to the REST API in src/server/server.ts.
-
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-
-const store = {
-	get(key, fallback) {
-		try {
-			return localStorage.getItem(key) ?? fallback;
-		} catch {
-			return fallback;
-		}
-	},
-	set(key, value) {
-		try {
-			value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value);
-		} catch {
-			/* storage unavailable (private mode) — preferences just won't persist */
-		}
-	},
-};
+// nVestPadi dashboard. Talks to the REST API in src/server/routes/.
+import { renderChart, sparkSvg } from "./chart.js";
+import {
+	$,
+	$$,
+	api,
+	chg,
+	debounce,
+	esc,
+	fmtCompact,
+	fmtDate,
+	fmtPrice,
+	setupTheme,
+	setupUserMenu,
+	showVerifyBanner,
+	store,
+	toast,
+	toastError,
+} from "./core.js";
 
 const state = {
-	exchange: store.get("nvest.exchange", "NGX"),
+	exchange: store.get("nvest.exchange", null),
 	movers: "gainers",
 	market: null,
 	status: null,
+	account: null,
 	watchlist: [],
 };
 
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-const esc = (v) =>
-	String(v ?? "").replace(
-		/[&<>"']/g,
-		(c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
-	);
-
-const fmtPrice = (n) =>
-	n == null
-		? "—"
-		: Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: n < 1 ? 4 : 2 });
-
-function fmtCompact(n) {
-	if (n == null || !Number.isFinite(n)) return "—";
-	return Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(n);
-}
-
-function chg(pct) {
-	if (pct == null) return '<span class="chg flat">—</span>';
-	const cls = pct > 0 ? "up" : pct < 0 ? "down" : "flat";
-	return `<span class="chg ${cls}">${pct > 0 ? "+" : ""}${Number(pct).toFixed(2)}%</span>`;
-}
-
 const currency = () => (state.exchange === "NGX" ? "₦" : "$");
-
-function toast(message, kind = "info") {
-	const el = document.createElement("div");
-	el.className = `toast ${kind}`;
-	el.textContent = message;
-	$("#toasts").append(el);
-	setTimeout(() => el.remove(), kind === "error" ? 6000 : 3500);
-}
-
-function debounce(fn, ms) {
-	let t;
-	return (...args) => {
-		clearTimeout(t);
-		t = setTimeout(() => fn(...args), ms);
-	};
-}
-
-function sparkSvg(values, cls = "spark") {
-	if (!values || values.length < 2) return `<svg class="${cls}" viewBox="0 0 64 24"></svg>`;
-	const min = Math.min(...values);
-	const max = Math.max(...values);
-	const pts = values
-		.map((v, i) => `${(i / (values.length - 1)) * 64},${22 - ((v - min) / (max - min || 1)) * 20}`)
-		.join(" ");
-	const colour = values.at(-1) >= values[0] ? "var(--up)" : "var(--down)";
-	return `<svg class="${cls}" viewBox="0 0 64 24" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}" stroke="${colour}" stroke-width="1.6" fill="none"/></svg>`;
-}
-
-// ---------------------------------------------------------------------------
-// API
-// ---------------------------------------------------------------------------
-
-async function api(path, options = {}) {
-	const key = store.get("nvest.apiKey", "");
-	const res = await fetch(path, {
-		...options,
-		headers: {
-			...(options.body ? { "Content-Type": "application/json" } : {}),
-			...(key ? { Authorization: `Bearer ${key}` } : {}),
-		},
-		body: options.body ? JSON.stringify(options.body) : undefined,
-	});
-	const data = await res.json().catch(() => ({}));
-	if (res.status === 401) {
-		showKeyPrompt();
-		throw new Error("API key required");
-	}
-	if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-	return data;
-}
-
-function showKeyPrompt() {
-	const banner = $("#banner");
-	if (!banner.hidden) return;
-	banner.hidden = false;
-	banner.innerHTML = `<form id="key-form">This server is protected. Enter its API key:<input type="password" name="key" required autocomplete="current-password" aria-label="API key"/><button class="btn btn-primary">Unlock</button></form>`;
-	$("#key-form").addEventListener("submit", (e) => {
-		e.preventDefault();
-		store.set("nvest.apiKey", new FormData(e.target).get("key"));
-		banner.hidden = true;
-		refreshAll();
-	});
-}
 
 // ---------------------------------------------------------------------------
 // Market overview
@@ -127,6 +37,7 @@ async function loadMarket() {
 	const m = await api(`/api/market?exchange=${state.exchange}&top=8`);
 	state.market = m;
 	$("#session").textContent = m.date ? `Session ${m.date}` : "";
+	$("#session").title = "End-of-day data for the latest trading session";
 
 	const total = m.count || 1;
 	const [up, flat, down] = $$("#breadth-bar span");
@@ -153,7 +64,9 @@ async function loadMarket() {
 }
 
 function emptyMarket() {
-	return `<div class="empty">No ${state.exchange} data yet. Click <b>Sync</b> or run <code>nvest sync</code>.</div>`;
+	return state.account?.user.role === "admin"
+		? `<div class="empty">No ${state.exchange} data yet. Click <b>Sync</b> to load the latest session.</div>`
+		: `<div class="empty">No ${state.exchange} data yet. It appears after the next market sync.</div>`;
 }
 
 function renderMovers() {
@@ -195,10 +108,6 @@ function fillSectorFilter() {
 	select.innerHTML = `<option value="">All sectors</option>${sectors.map((s) => `<option${s === current ? " selected" : ""}>${esc(s)}</option>`).join("")}`;
 }
 
-// ---------------------------------------------------------------------------
-// Screener
-// ---------------------------------------------------------------------------
-
 async function loadScreen() {
 	const form = new FormData($("#screen-form"));
 	const params = new URLSearchParams({ exchange: state.exchange, limit: "200" });
@@ -222,10 +131,6 @@ async function loadScreen() {
 				.join("")
 		: `<tr><td colspan="6">${state.market?.count ? '<div class="empty">No stocks match these filters.</div>' : emptyMarket()}</td></tr>`;
 }
-
-// ---------------------------------------------------------------------------
-// Security detail drawer
-// ---------------------------------------------------------------------------
 
 let lastFocus = null;
 
@@ -321,7 +226,7 @@ function renderSecurity({ report: r, history, watched }) {
 			e.target.textContent = watched ? "★ Watching" : "☆ Add to watchlist";
 			loadWatchlist();
 		} catch (err) {
-			toast(err.message, "error");
+			toastError(err);
 		}
 	});
 	$("#d-alert").addEventListener("click", () => {
@@ -340,95 +245,18 @@ function renderSecurity({ report: r, history, watched }) {
 	});
 }
 
-function smaSeries(values, period) {
-	return values.map((_, i) =>
-		i < period - 1 ? null : values.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period,
-	);
-}
-
-function renderChart(container, bars) {
-	if (bars.length < 2) {
-		container.innerHTML = '<div class="empty">Not enough history to chart yet.</div>';
-		return;
-	}
-	const W = 600;
-	const H = 240;
-	const pad = { l: 8, r: 52, t: 10, b: 22 };
-	const closes = bars.map((b) => b.close);
-	const sma20 = smaSeries(closes, 20);
-	const sma50 = smaSeries(closes, 50);
-	const all = [...closes, ...sma20.filter((v) => v != null), ...sma50.filter((v) => v != null)];
-	const min = Math.min(...all);
-	const max = Math.max(...all);
-	const span = max - min || 1;
-	const x = (i) => pad.l + (i / (bars.length - 1)) * (W - pad.l - pad.r);
-	const y = (v) => pad.t + (1 - (v - min) / span) * (H - pad.t - pad.b);
-	// SVG path that lifts the pen over null gaps (e.g. SMA warm-up).
-	const path = (series) => {
-		let d = "";
-		let drawing = false;
-		for (const [i, v] of series.entries()) {
-			if (v == null) {
-				drawing = false;
-				continue;
-			}
-			d += `${drawing ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
-			drawing = true;
-		}
-		return d;
-	};
-	const up = closes.at(-1) >= closes[0];
-	const colour = up ? "var(--up)" : "var(--down)";
-	const ticks = [0, 0.5, 1].map((f) => min + span * f);
-	const dateIdx = [0, Math.floor((bars.length - 1) / 2), bars.length - 1];
-
-	container.innerHTML = `
-		<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Price chart">
-			<defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${colour}" stop-opacity="0.18"/><stop offset="1" stop-color="${colour}" stop-opacity="0"/></linearGradient></defs>
-			${ticks.map((t) => `<line class="grid" x1="${pad.l}" x2="${W - pad.r}" y1="${y(t)}" y2="${y(t)}"/><text class="axis" x="${W - pad.r + 6}" y="${y(t) + 4}">${fmtPrice(t)}</text>`).join("")}
-			${dateIdx.map((i, n) => `<text class="axis" x="${x(i)}" y="${H - 4}" text-anchor="${["start", "middle", "end"][n]}">${esc(bars[i].date)}</text>`).join("")}
-			<path d="${path(closes)}L${x(bars.length - 1)},${H - pad.b}L${x(0)},${H - pad.b}Z" fill="url(#fill)" stroke="none"/>
-			<path class="sma50" d="${path(sma50)}"/>
-			<path class="sma20" d="${path(sma20)}"/>
-			<path class="price" d="${path(closes)}" stroke="${colour}"/>
-			<line class="cross" id="cross" y1="${pad.t}" y2="${H - pad.b}" visibility="hidden"/>
-		</svg>
-		<div class="chart-tip" id="tip" hidden></div>`;
-
-	const svg = $("svg", container);
-	const tip = $("#tip", container);
-	const cross = $("#cross", container);
-	const move = (clientX) => {
-		const rect = svg.getBoundingClientRect();
-		const ratio = (clientX - rect.left) / rect.width;
-		const i = Math.max(
-			0,
-			Math.min(bars.length - 1, Math.round(((ratio * W - pad.l) / (W - pad.l - pad.r)) * (bars.length - 1))),
-		);
-		const b = bars[i];
-		cross.setAttribute("x1", x(i));
-		cross.setAttribute("x2", x(i));
-		cross.setAttribute("visibility", "visible");
-		tip.hidden = false;
-		tip.innerHTML = `<b>${fmtPrice(b.close)}</b> ${b.changePct == null ? "" : chg(b.changePct)} <span class="muted">${esc(b.date)}</span>`;
-		const left = (x(i) / W) * rect.width;
-		tip.style.left = `${Math.min(Math.max(0, left - tip.offsetWidth / 2), rect.width - tip.offsetWidth)}px`;
-	};
-	svg.addEventListener("pointermove", (e) => move(e.clientX));
-	svg.addEventListener("pointerleave", () => {
-		tip.hidden = true;
-		cross.setAttribute("visibility", "hidden");
-	});
-}
-
 // ---------------------------------------------------------------------------
 // Watchlist & alerts
 // ---------------------------------------------------------------------------
 
+function quotaLabel(used, limit) {
+	return limit == null ? (used ? String(used) : "") : `${used} / ${limit}`;
+}
+
 async function loadWatchlist() {
 	const list = await api("/api/watchlist");
 	state.watchlist = list;
-	$("#watch-count").textContent = list.length ? `${list.length}` : "";
+	$("#watch-count").textContent = quotaLabel(list.length, state.account?.limits.watchlist);
 	$("#watchlist").innerHTML = list.length
 		? list
 				.map(
@@ -444,17 +272,24 @@ async function loadWatchlist() {
 
 async function loadAlerts() {
 	const list = await api("/api/alerts");
+	const active = list.filter((a) => !a.triggeredAt).length;
+	$("#alert-count").textContent = quotaLabel(active, state.account?.limits.activeAlerts);
+	const labels = state.status?.alertConditions ?? {};
 	$("#alerts").innerHTML = list.length
 		? list
 				.map(
 					(a) => `<li>
-						<span class="grow"><b>${esc(a.symbol)}</b> <span class="muted">${esc(a.condition)} ${a.threshold}</span>${a.note ? `<br><span class="muted small">${esc(a.note)}</span>` : ""}</span>
-						<span class="status ${a.triggeredAt ? "fired" : "active"}" title="${a.triggeredAt ? `Triggered ${esc(a.triggeredAt)} at ${a.triggerValue}` : "Waiting"}">${a.triggeredAt ? "fired" : "active"}</span>
-						<button class="link" type="button" data-delete-alert="${a.id}" aria-label="Delete alert ${a.id}">✕</button>
+						<span class="grow"><b>${esc(a.symbol)}</b> <span class="muted" title="${esc(labels[a.condition] ?? "")}">${esc(a.condition)} ${a.threshold}</span>${a.note ? `<br><span class="muted small">${esc(a.note)}</span>` : ""}</span>
+						${
+							a.triggeredAt
+								? `<button class="status fired" type="button" data-rearm-alert="${a.id}" title="Fired ${esc(fmtDate(a.triggeredAt))} at ${a.triggerValue} — click to re-arm">fired ↺</button>`
+								: '<span class="status active" title="Checked after every market sync">active</span>'
+						}
+						<button class="link" type="button" data-delete-alert="${a.id}" aria-label="Delete alert on ${esc(a.symbol)}">✕</button>
 					</li>`,
 				)
 				.join("")
-		: '<li class="empty">No alerts yet.</li>';
+		: '<li class="empty">No alerts yet. Get notified when a price, RSI or volume level hits.</li>';
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +305,19 @@ function renderSuggestions() {
 	$("#suggestions").innerHTML = SUGGESTIONS[state.exchange]
 		.map((s) => `<button type="button" class="chip">${esc(s)}</button>`)
 		.join("");
+}
+
+function renderAskQuota() {
+	const el = $("#ask-quota");
+	const limit = state.account?.limits.aiQuestionsPerDay;
+	if (!el) return;
+	if (limit == null) {
+		el.textContent = "";
+		return;
+	}
+	const left = Math.max(0, limit - state.account.usage.aiQuestionsToday);
+	el.textContent = `${left} of ${limit} questions left today`;
+	el.classList.toggle("down", left === 0);
 }
 
 async function ask(question) {
@@ -489,9 +337,10 @@ async function ask(question) {
 			${a.sources.length ? `<details><summary>${a.sources.length} source${a.sources.length > 1 ? "s" : ""}</summary><ol>${a.sources.map((s) => `<li>${esc(s.title)} <span class="muted">— ${esc(s.source)}</span></li>`).join("")}</ol></details>` : ""}
 			<p class="muted small" style="margin-top:8px">${esc(a.model)} · information only, not investment advice</p>`;
 	} catch (err) {
-		out.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+		out.innerHTML = `<div class="empty">${esc(err.message)}${err.code === "plan_limit" ? ' <a href="/app/settings#plan">See plans</a>' : ""}</div>`;
 	} finally {
 		button.disabled = false;
+		refreshAccount();
 	}
 }
 
@@ -574,28 +423,38 @@ function setupSearch() {
 // Wiring
 // ---------------------------------------------------------------------------
 
+async function refreshAccount() {
+	try {
+		state.account = await api("/api/account");
+		renderAskQuota();
+	} catch {
+		/* keep the last known account */
+	}
+}
+
 async function refreshAll() {
 	const results = await Promise.allSettled([loadMarket(), loadWatchlist(), loadAlerts()]);
 	await loadScreen().catch(() => undefined);
 	const failed = results.find((r) => r.status === "rejected");
-	if (failed && failed.reason.message !== "API key required") toast(failed.reason.message, "error");
+	if (failed && failed.reason.status !== 401) toastError(failed.reason);
 }
 
-async function loadStatus() {
-	const s = await api("/api/status");
-	state.status = s;
+function renderStatus() {
+	const s = state.status;
 	const pill = $("#ai-pill");
-	pill.textContent = s.features.ai ? s.features.ai.chatModel : "AI off";
+	pill.textContent = s.features.ai ? "AI on" : "AI off";
 	pill.classList.toggle("on", Boolean(s.features.ai));
 	pill.title = s.features.ai
-		? `${s.features.ai.provider}${s.features.search ? " + document search" : ""}`
-		: "Set AI_PROVIDER and AI_API_KEY to enable";
-	$("#channels").textContent = s.features.notifications.length
-		? `→ ${s.features.notifications.join(", ")}`
-		: "in-app only";
+		? `${s.features.ai.chatModel}${s.features.search ? " + research library" : ""}`
+		: "AI answers aren't enabled on this server yet";
+	const channels = state.account.notifications.activeChannels;
+	$("#channels").innerHTML = channels.length
+		? `→ ${esc(channels.join(", "))}`
+		: '<a href="/app/settings#notifications">set up delivery</a>';
 	$('#alert-form [name="condition"]').innerHTML = Object.entries(s.alertConditions)
 		.map(([k, label]) => `<option value="${esc(k)}" title="${esc(label)}">${esc(k)}</option>`)
 		.join("");
+	$("#sync").hidden = state.account.user.role !== "admin";
 }
 
 function selectTab(selector, isSelected) {
@@ -611,24 +470,26 @@ function setExchange(exchange) {
 	refreshAll();
 }
 
-function setupTheme() {
-	const saved = store.get("nvest.theme", null);
-	if (saved) document.documentElement.dataset.theme = saved;
-	$("#theme").addEventListener("click", () => {
-		const dark = document.documentElement.dataset.theme
-			? document.documentElement.dataset.theme === "dark"
-			: matchMedia("(prefers-color-scheme: dark)").matches;
-		const next = dark ? "light" : "dark";
-		document.documentElement.dataset.theme = next;
-		store.set("nvest.theme", next);
-	});
+async function syncNow(btn) {
+	btn.disabled = true;
+	btn.classList.add("spinning");
+	$("span", btn).textContent = "Syncing…";
+	try {
+		const r = await api("/api/admin/sync", { method: "POST", body: { exchange: "all" } });
+		const summary = r.results.map((x) => `${x.exchange} ${x.bars}`).join(" · ");
+		toast(`Synced ${summary}${r.triggered ? ` · ${r.triggered} alert(s) fired` : ""}`);
+		for (const err of r.errors) toast(`${err.exchange}: ${err.error}`, "error");
+		await refreshAll();
+	} catch (err) {
+		toastError(err);
+	} finally {
+		btn.disabled = false;
+		btn.classList.remove("spinning");
+		$("span", btn).textContent = "Sync";
+	}
 }
 
-function init() {
-	setupTheme();
-	setupSearch();
-	renderSuggestions();
-
+function wireEvents() {
 	for (const b of $$("[data-exchange]")) b.addEventListener("click", () => setExchange(b.dataset.exchange));
 	for (const b of $$("[data-movers]")) {
 		b.addEventListener("click", () => {
@@ -655,7 +516,7 @@ function init() {
 	const screenForm = $("#screen-form");
 	screenForm.addEventListener(
 		"input",
-		debounce(() => loadScreen().catch((err) => toast(err.message, "error")), 250),
+		debounce(() => loadScreen().catch(toastError), 250),
 	);
 	screenForm.addEventListener("submit", (e) => e.preventDefault());
 
@@ -686,43 +547,54 @@ function init() {
 			});
 			f.reset();
 			delete f.dataset.exchange;
-			toast("Alert created");
+			toast("Alert created — it's checked after every market sync.");
 			loadAlerts();
 		} catch (err) {
-			toast(err.message, "error");
+			toastError(err);
 		}
 	});
 	$("#alerts").addEventListener("click", async (e) => {
-		const id = e.target.closest("[data-delete-alert]")?.dataset.deleteAlert;
-		if (!id) return;
-		await api(`/api/alerts/${id}`, { method: "DELETE" }).catch((err) => toast(err.message, "error"));
+		const del = e.target.closest("[data-delete-alert]")?.dataset.deleteAlert;
+		const rearm = e.target.closest("[data-rearm-alert]")?.dataset.rearmAlert;
+		try {
+			if (del) await api(`/api/alerts/${del}`, { method: "DELETE" });
+			else if (rearm) {
+				await api(`/api/alerts/${rearm}/rearm`, { method: "POST" });
+				toast("Alert re-armed");
+			} else return;
+		} catch (err) {
+			toastError(err);
+		}
 		loadAlerts();
 	});
 
-	$("#sync").addEventListener("click", async (e) => {
-		const btn = e.currentTarget;
-		btn.disabled = true;
-		btn.classList.add("spinning");
-		$("span", btn).textContent = "Syncing…";
-		try {
-			const r = await api("/api/sync", { method: "POST", body: { exchange: "all" } });
-			const summary = r.results.map((x) => `${x.exchange} ${x.bars}`).join(" · ");
-			toast(`Synced ${summary}${r.triggered.length ? ` · ${r.triggered.length} alert(s) fired` : ""}`);
-			for (const err of r.errors) toast(`${err.exchange}: ${err.error}`, "error");
-			await refreshAll();
-		} catch (err) {
-			toast(err.message, "error");
-		} finally {
-			btn.disabled = false;
-			btn.classList.remove("spinning");
-			$("span", btn).textContent = "Sync";
-		}
-	});
+	$("#sync").addEventListener("click", (e) => syncNow(e.currentTarget));
+}
 
+async function init() {
+	setupTheme($("#theme"));
+	setupSearch();
+	wireEvents();
+
+	try {
+		[state.status, state.account] = await Promise.all([api("/api/status"), api("/api/account")]);
+	} catch (err) {
+		if (err.status !== 401) toastError(err);
+		return;
+	}
+	state.exchange ??= state.account.user.defaultExchange;
+	setupUserMenu(state.account, { mode: state.status.mode });
+	showVerifyBanner(state.account);
+	renderStatus();
+	renderAskQuota();
+	renderSuggestions();
 	selectTab("[data-exchange]", (b) => b.dataset.exchange === state.exchange);
-	loadStatus().catch(() => undefined);
-	refreshAll();
+	await refreshAll();
 
+	if (new URLSearchParams(location.search).get("welcome") === "1") {
+		toast(`Welcome, ${state.account.user.name.split(" ")[0]}! Open any stock to see its full report.`);
+		history.replaceState(null, "", location.pathname + location.hash);
+	}
 	const deepLink = /^#(NGX|US):([\w.-]+)$/.exec(location.hash);
 	if (deepLink) openSecurity(deepLink[1], deepLink[2]);
 }

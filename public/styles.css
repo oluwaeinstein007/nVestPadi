@@ -61,6 +61,10 @@
 * {
 	box-sizing: border-box;
 }
+/* Components set display (e.g. .btn is inline-flex), which would otherwise defeat the hidden attribute. */
+[hidden] {
+	display: none !important;
+}
 html,
 body {
 	margin: 0;
@@ -130,6 +134,13 @@ svg {
 .skip {
 	position: absolute;
 	left: -999px;
+}
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
 }
 .skip:focus {
 	left: 16px;
@@ -258,6 +269,10 @@ svg {
 	border: 1px solid var(--border);
 	background: var(--surface);
 	font-weight: 500;
+}
+a.btn {
+	color: inherit;
+	text-decoration: none;
 }
 .btn:hover {
 	background: var(--surface-2);
@@ -987,6 +1002,291 @@ table.data .sym span {
 	padding: 8px 24px 28px;
 }
 
+/* ---------- Account chrome ---------- */
+.user-menu {
+	position: relative;
+}
+.avatar {
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	border: 1px solid var(--border);
+	background: var(--brand);
+	color: var(--brand-contrast);
+	font-weight: 700;
+	font-size: 13px;
+	cursor: pointer;
+}
+.menu {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 8px);
+	min-width: 230px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+	padding: 6px;
+	display: grid;
+	z-index: 40;
+}
+.menu[hidden] {
+	display: none;
+}
+.menu-head {
+	display: grid;
+	gap: 2px;
+	padding: 8px 10px 10px;
+	border-bottom: 1px solid var(--border);
+	margin-bottom: 4px;
+}
+.menu a,
+.menu button {
+	text-align: left;
+	padding: 8px 10px;
+	border-radius: 8px;
+	border: 0;
+	background: none;
+	color: inherit;
+	text-decoration: none;
+	cursor: pointer;
+}
+.menu a:hover,
+.menu button:hover {
+	background: var(--surface-2);
+}
+.plan-badge {
+	justify-self: start;
+	margin-top: 6px;
+	font-size: 11px;
+	font-weight: 600;
+	padding: 1px 8px;
+	border-radius: 99px;
+	background: var(--surface-2);
+	color: var(--muted);
+}
+.plan-badge[data-plan="pro"],
+.plan-badge[data-plan="self-hosted"] {
+	background: var(--up-bg);
+	color: var(--up);
+}
+.banner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.banner .link {
+	color: var(--brand);
+	font-weight: 600;
+}
+.toast a {
+	color: inherit;
+	font-weight: 700;
+}
+.alerts button.status {
+	border: 0;
+	cursor: pointer;
+	font: inherit;
+	font-size: 11px;
+}
+.footer a,
+#channels a {
+	color: inherit;
+}
+
+/* ---------- Settings ---------- */
+.settings {
+	display: grid;
+	grid-template-columns: 200px minmax(0, 1fr);
+	gap: 24px;
+	max-width: 1040px;
+	margin: 0 auto;
+	padding: 24px;
+}
+.settings-nav {
+	position: sticky;
+	top: 76px;
+	align-self: start;
+	display: grid;
+	gap: 2px;
+}
+.settings-nav a {
+	padding: 8px 12px;
+	border-radius: 8px;
+	color: var(--muted);
+	text-decoration: none;
+}
+.settings-nav a:hover,
+.settings-nav a[aria-current="true"] {
+	background: var(--surface);
+	color: var(--text);
+}
+.settings-body {
+	display: grid;
+	gap: 20px;
+}
+.settings-body .card {
+	scroll-margin-top: 80px;
+}
+.settings-body .card > p.muted {
+	margin-bottom: 14px;
+}
+.form-grid {
+	display: grid;
+	gap: 14px;
+	max-width: 520px;
+}
+.field {
+	display: grid;
+	gap: 6px;
+}
+.field > span {
+	font-weight: 600;
+	font-size: 13px;
+}
+.field input,
+.field select {
+	padding: 9px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--surface-2);
+	width: 100%;
+}
+.field input[readonly] {
+	color: var(--muted);
+}
+.field small {
+	color: var(--muted);
+}
+.row {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+.switch {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	cursor: pointer;
+}
+.switch input {
+	width: 36px;
+	height: 20px;
+	accent-color: var(--brand);
+}
+.tag {
+	font-size: 11px;
+	font-weight: 600;
+	padding: 1px 8px;
+	border-radius: 99px;
+	background: var(--surface-2);
+	color: var(--muted);
+}
+.tag.ok {
+	background: var(--up-bg);
+	color: var(--up);
+}
+.tag.warn {
+	background: color-mix(in srgb, var(--warn) 15%, transparent);
+	color: var(--warn);
+}
+.meters {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+	margin: 14px 0 18px;
+}
+.meter {
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-2);
+}
+.meter b {
+	display: block;
+	font-size: 18px;
+	margin: 2px 0 8px;
+}
+.meter .track {
+	height: 6px;
+	border-radius: 99px;
+	background: var(--border);
+	overflow: hidden;
+}
+.meter .track i {
+	display: block;
+	height: 100%;
+	background: var(--brand);
+}
+.plans {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+}
+.plan {
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 16px;
+	display: grid;
+	gap: 8px;
+	align-content: start;
+}
+.plan.current {
+	border-color: var(--brand);
+	box-shadow: 0 0 0 1px var(--brand) inset;
+}
+.plan ul {
+	margin: 0;
+	padding-left: 18px;
+	color: var(--muted);
+}
+.plan .price {
+	font-size: 20px;
+	font-weight: 700;
+}
+.list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 8px;
+}
+.list li {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+}
+.list li .grow {
+	flex: 1;
+	min-width: 0;
+}
+.secret {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: var(--up-bg);
+	margin-top: 12px;
+	word-break: break-all;
+	font-family: var(--mono);
+	font-size: 12px;
+}
+.card.danger {
+	border-color: color-mix(in srgb, var(--down) 45%, var(--border));
+}
+.btn-danger {
+	background: var(--down);
+	color: #fff;
+	border-color: var(--down);
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
 	.layout {
@@ -1030,6 +1330,19 @@ table.data .sym span {
 	}
 	.alert-form {
 		grid-template-columns: 1fr 1fr;
+	}
+	.settings {
+		grid-template-columns: 1fr;
+		padding: 16px;
+	}
+	.settings-nav {
+		position: static;
+		display: flex;
+		overflow-x: auto;
+	}
+	.meters,
+	.plans {
+		grid-template-columns: 1fr;
 	}
 }
 @media (prefers-reduced-motion: reduce) {

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="robots" content="noindex" />
+		<title>Settings · nVestPadi</title>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/styles.css" />
+		<script type="module" src="/js/settings.js"></script>
+	</head>
+	<body data-auth="required">
+		<a class="skip" href="#main">Skip to content</a>
+
+		<header class="topbar">
+			<a class="brand" href="/app" title="Dashboard">
+				<img src="/favicon.svg" alt="" width="28" height="28" />
+				<span>nVest<strong>Padi</strong></span>
+			</a>
+			<a class="btn" href="/app">← Dashboard</a>
+			<div class="topbar-actions">
+				<button id="theme" class="btn btn-icon" type="button" aria-label="Toggle colour theme" title="Toggle theme">
+					<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" /></svg>
+				</button>
+				<div class="user-menu" id="user-menu">
+					<button class="avatar" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">?</button>
+					<div class="menu" role="menu" hidden>
+						<div class="menu-head">
+							<b data-user-name></b>
+							<span class="muted small" data-user-email></span>
+							<span class="plan-badge" data-plan></span>
+						</div>
+						<a role="menuitem" href="/app">Dashboard</a>
+						<a role="menuitem" href="#plan" data-upgrade hidden>Upgrade to Pro</a>
+						<button role="menuitem" type="button" data-signout>Sign out</button>
+					</div>
+				</div>
+			</div>
+		</header>
+
+		<div id="verify-banner" class="banner" hidden></div>
+
+		<main id="main" class="settings">
+			<nav class="settings-nav" aria-label="Settings sections">
+				<a href="#profile">Profile</a>
+				<a href="#notifications">Alert delivery</a>
+				<a href="#plan">Plan &amp; billing</a>
+				<a href="#security">Security</a>
+				<a href="#tokens">API tokens</a>
+				<a href="#danger">Delete account</a>
+			</nav>
+
+			<div class="settings-body">
+				<section class="card" id="profile">
+					<div class="card-head"><h2>Profile</h2></div>
+					<form class="form-grid" id="profile-form">
+						<label class="field"><span>Name</span><input name="name" required maxlength="80" autocomplete="name" /></label>
+						<label class="field">
+							<span>Email</span>
+							<input name="email" type="email" readonly />
+							<small id="email-status"></small>
+						</label>
+						<label class="field">
+							<span>Default market</span>
+							<select name="defaultExchange">
+								<option value="NGX">Nigerian Exchange (NGX)</option>
+								<option value="US">US equities</option>
+							</select>
+							<small>The dashboard opens on this market.</small>
+						</label>
+						<div class="row"><button class="btn btn-primary" type="submit">Save profile</button></div>
+					</form>
+				</section>
+
+				<section class="card" id="notifications">
+					<div class="card-head"><h2>Alert delivery</h2><span class="muted small" id="active-channels"></span></div>
+					<p class="muted small">Alerts are checked after every market sync. Triggered alerts are bundled into one message per channel.</p>
+					<form class="form-grid" id="notify-form">
+						<label class="switch">
+							<input type="checkbox" name="emailAlerts" />
+							<span><b>Email</b> <span class="muted small" id="email-channel-note"></span></span>
+						</label>
+						<label class="field" id="telegram-field">
+							<span>Telegram chat ID</span>
+							<input name="telegramChatId" inputmode="numeric" placeholder="e.g. 123456789" autocomplete="off" />
+							<small id="telegram-help"></small>
+						</label>
+						<label class="field">
+							<span>Discord webhook URL <span class="tag" id="discord-tag">Pro</span></span>
+							<input name="discordWebhookUrl" type="url" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" />
+							<small>Server Settings → Integrations → Webhooks → Copy URL.</small>
+						</label>
+						<div class="row">
+							<button class="btn btn-primary" type="submit">Save delivery settings</button>
+							<button class="btn" type="button" id="test-notify">Send a test</button>
+						</div>
+					</form>
+				</section>
+
+				<section class="card" id="plan">
+					<div class="card-head"><h2>Plan &amp; billing</h2><span class="plan-badge" id="plan-name"></span></div>
+					<p class="muted small" id="plan-summary"></p>
+					<div class="meters" id="meters"></div>
+					<div id="plan-actions"></div>
+				</section>
+
+				<section class="card" id="security">
+					<div class="card-head"><h2>Security</h2></div>
+					<form class="form-grid" id="password-form">
+						<input type="text" name="username" autocomplete="username" hidden />
+						<label class="field"><span>Current password</span><input name="currentPassword" type="password" required autocomplete="current-password" /></label>
+						<label class="field">
+							<span>New password</span>
+							<input name="newPassword" type="password" required minlength="8" maxlength="128" autocomplete="new-password" />
+							<small>At least 8 characters. Changing it signs out your other sessions.</small>
+						</label>
+						<div class="row"><button class="btn btn-primary" type="submit">Change password</button></div>
+					</form>
+					<div class="card-head" style="margin-top:24px"><h2>Active sessions</h2><button class="btn" type="button" id="signout-others">Sign out other sessions</button></div>
+					<ul class="list" id="sessions"></ul>
+				</section>
+
+				<section class="card" id="tokens">
+					<div class="card-head"><h2>API tokens</h2></div>
+					<p class="muted small">Use a token to call the REST API from scripts: <code>Authorization: Bearer nvp_…</code>. Treat it like a password.</p>
+					<form class="row" id="token-form">
+						<label class="field" style="flex:1;min-width:200px"><span class="sr-only">Token name</span><input name="name" placeholder="Token name, e.g. Google Sheets" required maxlength="60" /></label>
+						<button class="btn btn-primary" type="submit">Create token</button>
+					</form>
+					<div id="new-token" hidden></div>
+					<ul class="list" id="token-list" style="margin-top:14px"></ul>
+				</section>
+
+				<section class="card danger" id="danger">
+					<div class="card-head"><h2>Delete account</h2></div>
+					<p class="muted small">This permanently deletes your account, watchlist, alerts, sessions and API tokens. It can't be undone.</p>
+					<form class="form-grid" id="delete-form">
+						<label class="field"><span>Confirm with your password</span><input name="password" type="password" required autocomplete="current-password" /></label>
+						<div class="row"><button class="btn btn-danger" type="submit">Delete my account</button></div>
+					</form>
+				</section>
+			</div>
+		</main>
+
+		<footer class="footer muted small">
+			nVestPadi · Information only, not investment advice · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a>
+		</footer>
+	</body>
+</html>

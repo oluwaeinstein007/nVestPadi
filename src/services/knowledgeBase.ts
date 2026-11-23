@@ -9,18 +9,12 @@ import type { AIProvider } from "../ai/provider.js";
 import { parseDocument } from "../ingestion/documentParser.js";
 import { TextSplitter } from "../ingestion/textSplitter.js";
 import { type CrawlOptions, crawl } from "../ingestion/webCrawler.js";
+import { FeatureUnavailableError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";
 import { deterministicId, sha256 } from "../lib/util.js";
 import type { Quote } from "../markets/types.js";
 import type { Database } from "../storage/database.js";
 import type { SearchFilter, SearchHit, VectorPayload, VectorPoint, VectorStore } from "../storage/vectorStore.js";
-
-export class FeatureUnavailableError extends Error {
-	constructor(feature: string, missing: string[]) {
-		super(`${feature} needs ${missing.join(" and ")} — set them in .env (see .env.example).`);
-		this.name = "FeatureUnavailableError";
-	}
-}
 
 export interface IndexItem {
 	id: string;
@@ -56,7 +50,7 @@ export class KnowledgeBase {
 		const { ai, vectors } = this.require("Indexing");
 		if (items.length === 0) return { indexed: 0, unchanged: 0 };
 
-		const existing = this.db.indexedHashes(items.map((i) => i.id));
+		const existing = this.db.ledger.indexedHashes(items.map((i) => i.id));
 		const changed = items
 			.map((item) => ({ item, hash: sha256(item.text) }))
 			.filter(({ item, hash }) => existing.get(item.id) !== hash);
@@ -77,7 +71,7 @@ export class KnowledgeBase {
 			payload: { ...item.payload, content: item.text, indexedAt },
 		}));
 		await vectors.upsert(points);
-		this.db.recordIndexed(
+		this.db.ledger.recordIndexed(
 			changed.map(({ item, hash }) => ({
 				id: item.id,
 				kind: item.payload.kind,
