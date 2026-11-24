@@ -53,10 +53,16 @@ export class AccountService {
 	) {}
 
 	/** Profile, plan, limits (null = unlimited) and today's usage. */
-	overview(user: User) {
+	async overview(user: User) {
 		const limits = limitsFor(user, this.mode);
 		const planId = currentPlan(user);
 		const finite = (n: number) => (Number.isFinite(n) ? n : null);
+		const [watchlist, holdings, activeAlerts, aiQuestionsToday] = await Promise.all([
+			this.db.watchlist.count(user.id),
+			this.db.holdings.count(user.id),
+			this.db.alerts.countActive(user.id),
+			this.db.usage.get(user.id, "ai_questions"),
+		]);
 		return {
 			user: toPublicUser(user),
 			plan: {
@@ -72,12 +78,7 @@ export class AccountService {
 				aiQuestionsPerDay: finite(limits.aiQuestionsPerDay),
 				discordAlerts: limits.discordAlerts,
 			},
-			usage: {
-				watchlist: this.db.watchlist.count(user.id),
-				holdings: this.db.holdings.count(user.id),
-				activeAlerts: this.db.alerts.countActive(user.id),
-				aiQuestionsToday: this.db.usage.get(user.id, "ai_questions"),
-			},
+			usage: { watchlist, holdings, activeAlerts, aiQuestionsToday },
 			notifications: {
 				emailAlerts: user.emailAlerts,
 				dailyDigest: user.dailyDigest,
@@ -90,7 +91,7 @@ export class AccountService {
 		};
 	}
 
-	updateProfile(user: User, patch: { name?: string; defaultExchange?: Exchange }): User {
+	updateProfile(user: User, patch: { name?: string; defaultExchange?: Exchange }): Promise<User> {
 		const name = patch.name?.trim();
 		if (patch.name !== undefined && !name) throw new ValidationError("Name can't be empty.");
 		return this.db.users.update(user.id, { name, defaultExchange: patch.defaultExchange });
@@ -99,7 +100,7 @@ export class AccountService {
 	updateNotifications(
 		user: User,
 		patch: { emailAlerts?: boolean; dailyDigest?: boolean; discordWebhookUrl?: string | null },
-	): User {
+	): Promise<User> {
 		const discord = patch.discordWebhookUrl?.trim() || null;
 		if (discord && !DISCORD_WEBHOOK.test(discord)) {
 			throw new ValidationError("That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…).");
@@ -138,15 +139,18 @@ export class AccountService {
 				failed.push(raw);
 			}
 		}
-		const updated = this.db.users.update(user.id, { defaultExchange: input.defaultExchange, onboardedAt: sqlNow() });
+		const updated = await this.db.users.update(user.id, {
+			defaultExchange: input.defaultExchange,
+			onboardedAt: sqlNow(),
+		});
 		return { user: toPublicUser(updated), added, failed };
 	}
 
 	/** AI questions are metered per day. Returns a function that refunds the use if the call fails. */
-	meterAiQuestion(user: User): () => void {
+	async meterAiQuestion(user: User): Promise<() => Promise<void>> {
 		const limit = limitsFor(user, this.mode).aiQuestionsPerDay;
-		if (!Number.isFinite(limit)) return () => undefined;
-		if (!this.db.usage.consume(user.id, "ai_questions", limit)) {
+		if (!Number.isFinite(limit)) return async () => undefined;
+		if (!(await this.db.usage.consume(user.id, "ai_questions", limit))) {
 			throw new PlanLimitError(
 				`You've used today's ${limit} AI questions. They reset at midnight UTC — or upgrade to Pro for more.`,
 			);
@@ -156,32 +160,35 @@ export class AccountService {
 
 	// -- Sessions & API tokens -------------------------------------------------------
 
-	sessions(user: User, currentSessionId?: string): (Omit<SessionInfo, "id"> & { id: string; current: boolean })[] {
+	async sessions(
+		user: User,
+		currentSessionId?: string,
+	): Promise<(Omit<SessionInfo, "id"> & { id: string; current: boolean })[]> {
 		// Expose a short, non-secret handle rather than the stored hash.
-		return this.db.users.listSessions(user.id).map((s) => ({
+		return (await this.db.users.listSessions(user.id)).map((s) => ({
 			...s,
 			id: s.id.slice(0, 12),
 			current: s.id === currentSessionId,
 		}));
 	}
 
-	signOutOtherSessions(user: User, currentSessionId?: string): number {
+	signOutOtherSessions(user: User, currentSessionId?: string): Promise<number> {
 		return this.db.users.deleteSessions(user.id, currentSessionId);
 	}
 
-	apiTokens(user: User): ApiTokenInfo[] {
+	apiTokens(user: User): Promise<ApiTokenInfo[]> {
 		return this.db.users.listApiTokens(user.id);
 	}
 
 	/** The plaintext token is returned once and never stored. */
-	createApiToken(user: User, name: string): { token: string; info: ApiTokenInfo } {
+	async createApiToken(user: User, name: string): Promise<{ token: string; info: ApiTokenInfo }> {
 		const label = name.trim().slice(0, 60);
 		if (!label) throw new ValidationError("Give the token a name, e.g. “laptop CLI”.");
-		if (this.db.users.listApiTokens(user.id).length >= MAX_API_TOKENS) {
+		if ((await this.db.users.listApiTokens(user.id)).length >= MAX_API_TOKENS) {
 			throw new ValidationError(`You can have up to ${MAX_API_TOKENS} API tokens. Revoke one first.`);
 		}
 		const token = randomToken(32, API_TOKEN_PREFIX);
-		const info = this.db.users.createApiToken(
+		const info = await this.db.users.createApiToken(
 			user.id,
 			label,
 			hashToken(token),
@@ -190,8 +197,8 @@ export class AccountService {
 		return { token, info };
 	}
 
-	revokeApiToken(user: User, id: number) {
-		if (!this.db.users.deleteApiToken(user.id, id)) throw new NotFoundError("Token not found");
+	async revokeApiToken(user: User, id: number): Promise<void> {
+		if (!(await this.db.users.deleteApiToken(user.id, id))) throw new NotFoundError("Token not found");
 	}
 
 	/** Permanently delete the account and everything it owns (cascades in SQLite). */
@@ -199,11 +206,11 @@ export class AccountService {
 		await this.auth.confirmPassword(user, password);
 		if (
 			user.role === "admin" &&
-			this.db.users.list().filter((u) => u.role === "admin").length === 1 &&
-			this.db.users.count() > 1
+			(await this.db.users.list()).filter((u) => u.role === "admin").length === 1 &&
+			(await this.db.users.count()) > 1
 		) {
 			throw new ValidationError("You're the only admin. Make someone else an admin before deleting your account.");
 		}
-		this.db.users.delete(user.id);
+		await this.db.users.delete(user.id);
 	}
 }
