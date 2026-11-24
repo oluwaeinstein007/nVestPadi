@@ -50,17 +50,26 @@ export function createRequestHandler(app: App) {
 	const { trustProxy } = app.config.server;
 	const appOrigin = new URL(app.config.appUrl).host;
 
-	const resolvePrincipal = (req: IncomingMessage, cookieToken: string | null): Principal | null => {
+	const resolvePrincipal = async (req: IncomingMessage, cookieToken: string | null): Promise<Principal | null> => {
 		const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
 		if (bearer) {
-			const user = app.auth.authenticateApiToken(bearer);
+			const user = await app.auth.authenticateApiToken(bearer);
 			return user ? { user, sessionId: null, via: "token" } : null;
 		}
 		if (cookieToken) {
-			const found = app.auth.authenticateSession(cookieToken);
+			const found = await app.auth.authenticateSession(cookieToken);
 			return found ? { user: found.user, sessionId: found.sessionId, via: "session" } : null;
 		}
 		return null;
+	};
+
+	// Every page view asks whether the server still needs its first (owner) account; don't hit the database each time.
+	let ownerCheck = { at: 0, needsOwner: false };
+	const needsOwner = async (): Promise<boolean> => {
+		if (Date.now() - ownerCheck.at > 5_000) {
+			ownerCheck = { at: Date.now(), needsOwner: (await app.db.users.count()) === 0 };
+		}
+		return ownerCheck.needsOwner;
 	};
 
 	/** Browsers always send Origin on cross-site POSTs; reject any that isn't us. */
@@ -94,12 +103,12 @@ export function createRequestHandler(app: App) {
 
 		try {
 			const cookieToken = parseCookies(req.headers.cookie)[SESSION_COOKIE] || null;
-			const principal = resolvePrincipal(req, cookieToken);
+			const principal = await resolvePrincipal(req, cookieToken);
 
 			if (!url.pathname.startsWith("/api/")) {
 				if (method !== "GET" && method !== "HEAD") throw new NotFoundError();
 				const result = site.resolve(url.pathname, url.search, principal?.user ?? null, {
-					needsOwner: app.db.users.count() === 0,
+					needsOwner: await needsOwner(),
 				});
 				if (!result) throw new NotFoundError();
 				if ("redirect" in result) return redirect(res, result.redirect);
@@ -174,7 +183,7 @@ export async function startServer(app: App, options: { port?: number; host?: str
 		server.listen(port, host, resolve);
 	});
 	logger.info(`nVestPadi (${app.config.mode}) listening on http://${host === "0.0.0.0" ? "localhost" : host}:${port}`);
-	if (app.db.users.count() === 0)
+	if ((await app.db.users.count()) === 0)
 		logger.info(`no accounts yet — create the owner account at ${app.config.appUrl}/signup`);
 	onShutdown(
 		() =>
