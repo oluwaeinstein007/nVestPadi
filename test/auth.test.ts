@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { createApp } from "../src/app.js";
 import { parseConfig } from "../src/config.js";
 import { hashPassword, verifyPassword } from "../src/lib/crypto.js";
@@ -16,7 +16,7 @@ const meta = { userAgent: "test", ip: "127.0.0.1" };
 
 function setup(env: Record<string, string> = {}) {
 	const mailer = new TestMailer();
-	const app = createApp(parseConfig({ DATABASE_PATH: ":memory:", NODE_ENV: "test", ...env }), { mailer });
+	const app = await createApp(parseConfig({ DATABASE_PATH: ":memory:", NODE_ENV: "test", ...env }), { mailer });
 	return { app, mailer };
 }
 
@@ -35,14 +35,14 @@ describe("passwords", () => {
 describe("sign-up and sign-in", () => {
 	it("makes the first account the admin, then closes sign-up on self-hosted servers", async () => {
 		const { app } = setup();
-		assert.deepEqual(app.auth.signupStatus(), { open: true, needsOwner: true });
+		assert.deepEqual(await app.auth.signupStatus(), { open: true, needsOwner: true });
 		const { user: owner } = await app.auth.signup(
 			{ name: "Ada", email: " Ada@Example.com ", password: "s3cret-pass" },
 			meta,
 		);
 		assert.equal(owner.role, "admin");
 		assert.equal(owner.email, "ada@example.com");
-		assert.deepEqual(app.auth.signupStatus(), { open: false, needsOwner: false });
+		assert.deepEqual(await app.auth.signupStatus(), { open: false, needsOwner: false });
 		await assert.rejects(
 			app.auth.signup({ name: "Bo", email: "bo@example.com", password: "s3cret-pass" }, meta),
 			(e: Error & { status?: number }) => e.status === 403,
@@ -79,10 +79,10 @@ describe("sign-up and sign-in", () => {
 		await assert.rejects(app.auth.login({ email: "ada@example.com", password: "nope-nope" }, meta), /Incorrect/);
 		await assert.rejects(app.auth.login({ email: "who@example.com", password: "nope-nope" }, meta), /Incorrect/);
 		const { token } = await app.auth.login({ email: "ADA@example.com", password: "s3cret-pass" }, meta);
-		assert.equal(app.auth.authenticateSession(token)?.user.email, "ada@example.com");
-		assert.equal(app.auth.authenticateSession("forged"), null);
+		assert.equal(await app.auth.authenticateSession(token)?.user.email, "ada@example.com");
+		assert.equal(await app.auth.authenticateSession("forged"), null);
 		app.auth.logout(token);
-		assert.equal(app.auth.authenticateSession(token), null);
+		assert.equal(await app.auth.authenticateSession(token), null);
 	});
 });
 
@@ -93,12 +93,12 @@ describe("email verification and password reset", () => {
 		assert.equal(u.emailVerifiedAt, null);
 		assert.match(mailer.sent[0]?.subject ?? "", /Confirm your email/);
 		const token = mailer.lastToken();
-		assert.ok(app.auth.verifyEmail(token).emailVerifiedAt);
-		assert.throws(() => app.auth.verifyEmail(token), /invalid or has expired/);
+		assert.ok(await app.auth.verifyEmail(token).emailVerifiedAt);
+		assert.throws(() => await app.auth.verifyEmail(token), /invalid or has expired/);
 	});
 
 	it("auto-verifies when email only goes to the log", async () => {
-		const app = createApp(parseConfig({ DATABASE_PATH: ":memory:", NODE_ENV: "test" }));
+		const app = await createApp(parseConfig({ DATABASE_PATH: ":memory:", NODE_ENV: "test" }));
 		const { user: u } = await app.auth.signup({ name: "Ada", email: "ada@example.com", password: "s3cret-pass" }, meta);
 		assert.ok(u.emailVerifiedAt);
 	});
@@ -116,8 +116,8 @@ describe("email verification and password reset", () => {
 		await app.auth.requestPasswordReset("ada@example.com");
 		const resetToken = mailer.lastToken();
 		const { token } = await app.auth.resetPassword(resetToken, "brand-new-pass", meta);
-		assert.equal(app.auth.authenticateSession(oldSession), null);
-		assert.ok(app.auth.authenticateSession(token));
+		assert.equal(await app.auth.authenticateSession(oldSession), null);
+		assert.ok(await app.auth.authenticateSession(token));
 		await app.auth.login({ email: "ada@example.com", password: "brand-new-pass" }, meta);
 		await assert.rejects(app.auth.resetPassword(resetToken, "another-pass", meta), /invalid or has expired/);
 	});
@@ -128,12 +128,12 @@ describe("email verification and password reset", () => {
 			{ name: "Ada", email: "ada@example.com", password: "s3cret-pass" },
 			meta,
 		);
-		const other = app.auth.createSession(u.id, meta);
-		const current = app.auth.authenticateSession(token)?.sessionId;
+		const other = await app.auth.createSession(u.id, meta);
+		const current = await app.auth.authenticateSession(token)?.sessionId;
 		await assert.rejects(app.auth.changePassword(u, "wrong-pass", "new-pass-123", current), /incorrect/);
 		await app.auth.changePassword(u, "s3cret-pass", "new-pass-123", current);
-		assert.ok(app.auth.authenticateSession(token));
-		assert.equal(app.auth.authenticateSession(other), null);
+		assert.ok(await app.auth.authenticateSession(token));
+		assert.equal(await app.auth.authenticateSession(other), null);
 	});
 });
 
@@ -141,63 +141,63 @@ describe("accounts", () => {
 	it("issues API tokens that are shown once and can be revoked", async () => {
 		const { app } = setup();
 		const u = user(app.db);
-		const { token, info } = app.accounts.createApiToken(u, "laptop");
+		const { token, info } = await app.accounts.createApiToken(u, "laptop");
 		assert.match(token, /^nvp_/);
 		assert.equal(info.prefix, token.slice(0, 10));
-		assert.equal(app.auth.authenticateApiToken(token)?.id, u.id);
-		assert.equal(app.auth.authenticateApiToken("nvp_forged"), null);
-		app.accounts.revokeApiToken(u, info.id);
-		assert.equal(app.auth.authenticateApiToken(token), null);
+		assert.equal(await app.auth.authenticateApiToken(token)?.id, u.id);
+		assert.equal(await app.auth.authenticateApiToken("nvp_forged"), null);
+		await app.accounts.revokeApiToken(u, info.id);
+		assert.equal(await app.auth.authenticateApiToken(token), null);
 	});
 
-	it("meters AI questions per day on Free and refunds failed ones", () => {
+	it("meters AI questions per day on Free and refunds failed ones", async () => {
 		const { app } = setup({ APP_MODE: "cloud" });
 		const u = user(app.db);
-		for (let i = 0; i < 4; i++) app.accounts.meterAiQuestion(u);
-		const refund = app.accounts.meterAiQuestion(u);
-		assert.throws(() => app.accounts.meterAiQuestion(u), /today's 5 AI questions/);
+		for (let i = 0; i < 4; i++) await app.accounts.meterAiQuestion(u);
+		const refund = await app.accounts.meterAiQuestion(u);
+		assert.throws(() => await app.accounts.meterAiQuestion(u), /today's 5 AI questions/);
 		refund();
-		app.accounts.meterAiQuestion(u);
-		assert.equal(app.accounts.overview(u).usage.aiQuestionsToday, 5);
+		await app.accounts.meterAiQuestion(u);
+		assert.equal(await app.accounts.overview(u).usage.aiQuestionsToday, 5);
 	});
 
-	it("is unlimited when self-hosted", () => {
+	it("is unlimited when self-hosted", async () => {
 		const { app } = setup();
-		const o = app.accounts.overview(user(app.db));
+		const o = await app.accounts.overview(user(app.db));
 		assert.equal(o.plan.id, "self-hosted");
 		assert.equal(o.limits.watchlist, null);
 		assert.equal(o.limits.discordAlerts, true);
 	});
 
-	it("validates notification channels and gates Discord to Pro", () => {
+	it("validates notification channels and gates Discord to Pro", async () => {
 		const { app } = setup({ APP_MODE: "cloud" });
 		const free = user(app.db);
 		const hook = "https://discord.com/api/webhooks/123/abc-DEF_1";
-		assert.equal(app.accounts.updateNotifications(free, { dailyDigest: false }).dailyDigest, false);
-		assert.throws(() => app.accounts.updateNotifications(free, { discordWebhookUrl: hook }), /part of Pro/);
+		assert.equal(await app.accounts.updateNotifications(free, { dailyDigest: false }).dailyDigest, false);
+		assert.throws(() => await app.accounts.updateNotifications(free, { discordWebhookUrl: hook }), /part of Pro/);
 		const pro = user(app.db, { plan: "pro" });
-		assert.throws(() => app.accounts.updateNotifications(pro, { discordWebhookUrl: "https://evil.test/x" }), /Discord/);
-		assert.equal(app.accounts.updateNotifications(pro, { discordWebhookUrl: hook }).discordWebhookUrl, hook);
+		assert.throws(() => await app.accounts.updateNotifications(pro, { discordWebhookUrl: "https://evil.test/x" }), /Discord/);
+		assert.equal(await app.accounts.updateNotifications(pro, { discordWebhookUrl: hook }).discordWebhookUrl, hook);
 	});
 
-	it("treats a long-lapsed Pro renewal as Free", () => {
+	it("treats a long-lapsed Pro renewal as Free", async () => {
 		const { app } = setup();
-		const u = app.db.users.update(user(app.db, { plan: "pro" }).id, { planRenewsAt: "2020-01-01 00:00:00" });
+		const u = await app.db.users.update(user(app.db, { plan: "pro" }).id, { planRenewsAt: "2020-01-01 00:00:00" });
 		assert.equal(currentPlan(u), "free");
-		assert.equal(currentPlan(app.db.users.update(u.id, { planRenewsAt: null })), "pro");
+		assert.equal(currentPlan(await app.db.users.update(u.id, { planRenewsAt: null })), "pro");
 	});
 
 	it("deletes an account and everything it owns", async () => {
 		const { app } = setup();
-		seed(app.db, [{ s: security("GTCO", "Guaranty Trust"), closes: [1, 2, 3] }]);
+		await seed(app.db, [{ s: security("GTCO", "Guaranty Trust"), closes: [1, 2, 3] }]);
 		const { user: u } = await app.auth.signup({ name: "Ada", email: "ada@example.com", password: "s3cret-pass" }, meta);
-		app.db.watchlist.add(u.id, "NGX", "GTCO");
-		app.alerts.add(u, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 5 });
+		await app.db.watchlist.add(u.id, "NGX", "GTCO");
+		await app.alerts.add(u, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 5 });
 		await assert.rejects(app.accounts.deleteAccount(u, "wrong"), /incorrect/);
 		await app.accounts.deleteAccount(u, "s3cret-pass");
-		assert.equal(app.db.users.byId(u.id), null);
-		assert.equal(app.db.watchlist.count(u.id), 0);
-		assert.equal(app.db.alerts.countActive(u.id), 0);
+		assert.equal(await app.db.users.byId(u.id), null);
+		assert.equal(await app.db.watchlist.count(u.id), 0);
+		assert.equal(await app.db.alerts.countActive(u.id), 0);
 	});
 });
 
@@ -215,13 +215,13 @@ describe("migration from v2 (single-user) databases", () => {
 
 			const db = new Database(file);
 			assert.equal(db.schemaVersion, MIGRATIONS.length);
-			const owner = db.users.create({ email: "owner@example.com", name: "Owner", passwordHash: "x", role: "admin" });
-			assert.deepEqual(db.users.claimUnownedData(owner.id), { watchlist: 2, alerts: 1 });
+			const owner = await db.users.create({ email: "owner@example.com", name: "Owner", passwordHash: "x", role: "admin" });
+			assert.deepEqual(await db.users.claimUnownedData(owner.id), { watchlist: 2, alerts: 1 });
 			assert.deepEqual(
-				db.watchlist.list(owner.id).map((w) => w.symbol),
+				await db.watchlist.list(owner.id).map((w) => w.symbol),
 				["GTCO", "AAPL"],
 			);
-			assert.equal(db.alerts.countActive(owner.id), 1);
+			assert.equal(await db.alerts.countActive(owner.id), 1);
 			db.close();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

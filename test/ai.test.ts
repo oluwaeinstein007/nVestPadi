@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import type { AIProvider, ChatMessage } from "../src/ai/provider.js";
 import { InsightService } from "../src/services/insightService.js";
 import { KnowledgeBase } from "../src/services/knowledgeBase.js";
@@ -38,8 +38,8 @@ class StubVectors {
 const closes = Array.from({ length: 70 }, (_, i) => 100 + i);
 
 function setup() {
-	const db = memoryDb();
-	seed(db, [{ s: security("GTCO", "Guaranty Trust Holding Company Plc", "Financial Services"), closes }]);
+	const db = await memoryDb();
+	await seed(db, [{ s: security("GTCO", "Guaranty Trust Holding Company Plc", "Financial Services"), closes }]);
 	const ai = new StubAI();
 	const vectors = new StubVectors();
 	const kb = new KnowledgeBase(db, ai, vectors as unknown as VectorStore);
@@ -108,7 +108,7 @@ describe("ask", () => {
 	});
 
 	it("explains what to do when there is no data at all", async () => {
-		const db = memoryDb();
+		const db = await memoryDb();
 		const ai = new StubAI();
 		const kb = new KnowledgeBase(db, ai, null);
 		const answer = await new InsightService(db, ai, kb, new MarketService(db, kb, marketOptions)).ask(

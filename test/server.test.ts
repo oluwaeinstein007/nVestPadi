@@ -12,7 +12,7 @@ const PAYSTACK_SECRET = "sk_test_secret";
 
 describe("HTTP API (cloud mode)", () => {
 	const mailer = new TestMailer();
-	const app = createApp(
+	const app = await createApp(
 		parseConfig({
 			DATABASE_PATH: ":memory:",
 			NODE_ENV: "test",
@@ -54,7 +54,7 @@ describe("HTTP API (cloud mode)", () => {
 	let member = "";
 
 	before(async () => {
-		seed(app.db, [
+		await seed(app.db, [
 			{
 				s: security("GTCO", "Guaranty Trust", "Financial Services"),
 				closes: Array.from({ length: 70 }, (_, i) => 100 + i),
@@ -70,7 +70,7 @@ describe("HTTP API (cloud mode)", () => {
 	});
 	after(() => {
 		server.close();
-		app.close();
+		await app.close();
 	});
 
 	it("keeps health public and everything else behind sign-in", async () => {
@@ -251,7 +251,7 @@ describe("HTTP API (cloud mode)", () => {
 			origin: null,
 			headers: { "x-paystack-signature": hmacSha512Hex(PAYSTACK_SECRET, cancel) },
 		});
-		assert.equal(app.db.users.byEmail("bo@example.com")?.plan, "free");
+		assert.equal(await app.db.users.byEmail("bo@example.com")?.plan, "free");
 	});
 
 	it("signs in and out", async () => {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { marketOverview, screen } from "../src/analysis/market.js";
 import { buildReport } from "../src/analysis/report.js";
 import { titleCase } from "../src/markets/ngx.js";
@@ -18,8 +18,8 @@ const down = Array.from({ length: 80 }, (_, i) => 200 - i);
 const flat = Array.from({ length: 80 }, () => 50);
 
 function fixture() {
-	const db = memoryDb();
-	seed(db, [
+	const db = await memoryDb();
+	await seed(db, [
 		{ s: security("GTCO", "Guaranty Trust Holding Company Plc", "Financial Services"), closes: up },
 		{ s: security("ZENITHBANK", "Zenith Bank Plc", "Financial Services"), closes: down },
 		{ s: security("DANGCEM", "Dangote Cement", "Industrial Goods"), closes: flat },
@@ -29,29 +29,29 @@ function fixture() {
 }
 
 describe("database", () => {
-	it("upserts idempotently and returns latest quotes per symbol", () => {
+	it("upserts idempotently and returns latest quotes per symbol", async () => {
 		const db = fixture();
-		db.market.upsertPrices(makeBars("GTCO", up)); // re-run is a no-op
-		const quotes = db.market.latestQuotes("NGX");
+		await db.market.upsertPrices(makeBars("GTCO", up)); // re-run is a no-op
+		const quotes = await db.market.latestQuotes("NGX");
 		assert.equal(quotes.length, 3);
 		assert.equal(quotes.find((q) => q.symbol === "GTCO")?.close, 179);
-		assert.equal(db.market.history("NGX", "GTCO").length, 80);
-		assert.deepEqual(db.market.findExchanges("aapl"), ["US"]);
+		assert.equal(await db.market.history("NGX", "GTCO").length, 80);
+		assert.deepEqual(await db.market.findExchanges("aapl"), ["US"]);
 	});
 
-	it("keeps richer existing fields when a sparser source upserts the same day", () => {
+	it("keeps richer existing fields when a sparser source upserts the same day", async () => {
 		const db = fixture();
 		const last = makeBars("GTCO", up).at(-1) as PriceBar;
-		db.market.upsertPrices([{ ...last, open: null, high: null, volume: null }]);
-		const bar = db.market.history("NGX", "GTCO").at(-1);
+		await db.market.upsertPrices([{ ...last, open: null, high: null, volume: null }]);
+		const bar = await db.market.history("NGX", "GTCO").at(-1);
 		assert.notEqual(bar?.open, null);
 		assert.notEqual(bar?.volume, null);
 	});
 });
 
 describe("market overview & screener", () => {
-	it("computes breadth, movers and sectors for the latest session", () => {
-		const o = marketOverview(fixture(), "NGX");
+	it("computes breadth, movers and sectors for the latest session", async () => {
+		const o = await marketOverview(fixture(), "NGX");
 		assert.equal(o.count, 3);
 		assert.equal(o.advancers, 1);
 		assert.equal(o.decliners, 1);
@@ -65,17 +65,17 @@ describe("market overview & screener", () => {
 		);
 	});
 
-	it("filters by sector/price and RSI", () => {
+	it("filters by sector/price and RSI", async () => {
 		const db = fixture();
 		assert.deepEqual(
-			screen(db, { exchange: "NGX", sector: "financial", sort: "symbol" }).map((r) => r.symbol),
+			await screen(db, { exchange: "NGX", sector: "financial", sort: "symbol" }).map((r) => r.symbol),
 			["GTCO", "ZENITHBANK"],
 		);
 		assert.deepEqual(
-			screen(db, { exchange: "NGX", minPrice: 150 }).map((r) => r.symbol),
+			await screen(db, { exchange: "NGX", minPrice: 150 }).map((r) => r.symbol),
 			["GTCO"],
 		);
-		const oversold = screen(db, { exchange: "NGX", rsiBelow: 30 });
+		const oversold = await screen(db, { exchange: "NGX", rsiBelow: 30 });
 		assert.deepEqual(
 			oversold.map((r) => r.symbol),
 			["ZENITHBANK"],
@@ -85,7 +85,7 @@ describe("market overview & screener", () => {
 });
 
 describe("security report", () => {
-	it("classifies trend and computes performance", () => {
+	it("classifies trend and computes performance", async () => {
 		const r = buildReport(security("GTCO", "GTCO"), makeBars("GTCO", up));
 		assert.equal(r.trend, "uptrend");
 		assert.equal(r.performance["1W"], Math.round(((179 - 174) / 174) * 10000) / 100);
@@ -94,7 +94,7 @@ describe("security report", () => {
 		assert.ok(r.highlights.length > 0);
 	});
 
-	it("degrades gracefully with little history", () => {
+	it("degrades gracefully with little history", async () => {
 		const r = buildReport(security("NEW", "New Listing"), makeBars("NEW", [10, 11]));
 		assert.equal(r.trend, "insufficient data");
 		assert.equal(r.indicators.rsi14, null);
@@ -108,11 +108,11 @@ describe("alerts", () => {
 	it("fires once when a condition is met, scoped to each owner", async () => {
 		const db = fixture();
 		const alerts = new AlertService(db, notifier(), "self-hosted");
-		const alice = user(db);
-		const bob = user(db);
-		alerts.add(alice, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 150 });
-		alerts.add(alice, { exchange: "NGX", symbol: "GTCO", condition: "below", threshold: 10 });
-		alerts.add(bob, { exchange: "NGX", symbol: "ZENITHBANK", condition: "rsi-below", threshold: 30 });
+		const alice = await user(db);
+		const bob = await user(db);
+		await alerts.add(alice, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 150 });
+		await alerts.add(alice, { exchange: "NGX", symbol: "GTCO", condition: "below", threshold: 10 });
+		await alerts.add(bob, { exchange: "NGX", symbol: "ZENITHBANK", condition: "rsi-below", threshold: 30 });
 
 		const fired = await alerts.check();
 		assert.deepEqual(
@@ -120,47 +120,47 @@ describe("alerts", () => {
 			[`${alice.id}:GTCO:above`, `${bob.id}:ZENITHBANK:rsi-below`],
 		);
 		assert.equal((await alerts.check()).length, 0);
-		assert.equal(alerts.list(alice, true).length, 1);
-		assert.equal(alerts.list(bob).length, 1);
-		assert.equal(alerts.remove(bob, alerts.list(alice)[0]?.id as number), false, "can't delete someone else's alert");
+		assert.equal(await alerts.list(alice, true).length, 1);
+		assert.equal(await alerts.list(bob).length, 1);
+		assert.equal(await alerts.remove(bob, await alerts.list(alice)[0]?.id as number), false, "can't delete someone else's alert");
 	});
 
 	it("re-arms a fired alert", async () => {
 		const db = fixture();
 		const alerts = new AlertService(db, notifier(), "self-hosted");
-		const u = user(db);
-		const a = alerts.add(u, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 150 });
+		const u = await user(db);
+		const a = await alerts.add(u, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 150 });
 		await alerts.check();
-		assert.equal(alerts.rearm(u, a.id).triggeredAt, null);
+		assert.equal(await alerts.rearm(u, a.id).triggeredAt, null);
 		assert.equal((await alerts.check()).length, 1);
 	});
 
-	it("validates thresholds", () => {
-		const db = memoryDb();
+	it("validates thresholds", async () => {
+		const db = await memoryDb();
 		const alerts = new AlertService(db, notifier(), "self-hosted");
-		const u = user(db);
-		assert.throws(() => alerts.add(u, { exchange: "NGX", symbol: "X", condition: "volume-spike", threshold: 0.5 }));
-		assert.throws(() => alerts.add(u, { exchange: "NGX", symbol: "X", condition: "above", threshold: Number.NaN }));
+		const u = await user(db);
+		assert.throws(() => await alerts.add(u, { exchange: "NGX", symbol: "X", condition: "volume-spike", threshold: 0.5 }));
+		assert.throws(() => await alerts.add(u, { exchange: "NGX", symbol: "X", condition: "above", threshold: Number.NaN }));
 	});
 
-	it("enforces the plan's active-alert limit in cloud mode", () => {
+	it("enforces the plan's active-alert limit in cloud mode", async () => {
 		const db = fixture();
 		const alerts = new AlertService(db, notifier(), "cloud");
-		const free = user(db);
-		const pro = user(db, { plan: "pro" });
+		const free = await user(db);
+		const pro = await user(db, { plan: "pro" });
 		for (let i = 0; i < 3; i++)
-			alerts.add(free, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 200 + i });
+			await alerts.add(free, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 200 + i });
 		assert.throws(
-			() => alerts.add(free, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 999 }),
+			() => await alerts.add(free, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 999 }),
 			(e: Error & { status?: number }) => e.status === 402,
 		);
 		for (let i = 0; i < 4; i++)
-			alerts.add(pro, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 200 + i });
+			await alerts.add(pro, { exchange: "NGX", symbol: "GTCO", condition: "above", threshold: 200 + i });
 	});
 });
 
 describe("symbol detection for AI answers", () => {
-	it("finds tickers and company names but not English words", () => {
+	it("finds tickers and company names but not English words", async () => {
 		const db = fixture();
 		const kb = new KnowledgeBase(db, null, null);
 		const insights = new InsightService(db, null, kb, new MarketService(db, kb, marketOptions));
@@ -176,7 +176,7 @@ describe("symbol detection for AI answers", () => {
 });
 
 describe("NGX helpers", () => {
-	it("title-cases sectors sensibly", () => {
+	it("title-cases sectors sensibly", async () => {
 		assert.equal(titleCase("OIL AND GAS"), "Oil and Gas");
 		assert.equal(titleCase("ICT"), "ICT");
 		assert.equal(titleCase("CONSTRUCTION/REAL ESTATE"), "Construction/Real Estate");
