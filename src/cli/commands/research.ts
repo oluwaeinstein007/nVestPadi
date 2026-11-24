@@ -11,7 +11,7 @@ export const researchCommands: Record<string, Command> = {
 		async run(app, args, flags, json) {
 			const [kind, ...targets] = args;
 			if (kind === "list") {
-				const sources = app.db.ledger.listSources();
+				const sources = await app.db.ledger.listSources();
 				if (json) return sources;
 				return out(
 					table(sources, [

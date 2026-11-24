@@ -31,14 +31,14 @@ export const exchangesArg = (arg: string | undefined): Exchange[] =>
  * The account a user-scoped command (watchlist, alerts) acts as: `--user <email>`,
  * or the server's first admin.
  */
-export function cliUser(app: App, flags: Flags): User {
+export async function cliUser(app: App, flags: Flags): Promise<User> {
 	const email = str(flags.user);
 	if (email) {
-		const user = app.db.users.byEmail(email.trim().toLowerCase());
+		const user = await app.db.users.byEmail(email.trim().toLowerCase());
 		if (!user) throw new UsageError(`No account for ${email}. List accounts with \`nvest users list\`.`);
 		return user;
 	}
-	const admin = app.db.users.firstAdmin();
+	const admin = await app.db.users.firstAdmin();
 	if (!admin) {
 		throw new UsageError(
 			`No accounts yet. Create the owner account first:\n  nvest users create you@example.com --name "Your Name"\nor sign up at ${app.config.appUrl}/signup`,

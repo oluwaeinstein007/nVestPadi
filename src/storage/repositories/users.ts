@@ -1,8 +1,7 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { Exchange } from "../../markets/types.js";
-import { type Database, inSeconds } from "../database.js";
-
-type Row = Record<string, SQLInputValue>;
+import type { Database, Param, Row } from "../database.js";
+import { inSeconds, timestamp } from "../driver.js";
+import { flag, str } from "../rows.js";
 
 export type Role = "admin" | "member";
 export type PlanId = "free" | "pro";
@@ -72,234 +71,251 @@ export type AuthTokenPurpose = "verify-email" | "reset-password" | "telegram-lin
 export class UserRepository {
 	constructor(private readonly db: Database) {}
 
-	count(): number {
-		return (this.db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n;
+	count(): Promise<number> {
+		return this.db.count("SELECT COUNT(*) AS n FROM users");
 	}
 
-	create(input: {
+	async create(input: {
 		email: string;
 		name: string;
 		passwordHash: string;
 		role?: Role;
 		plan?: PlanId;
 		emailVerified?: boolean;
-	}): User {
-		const r = this.db
-			.prepare(
-				`INSERT INTO users (email, name, password_hash, role, plan, email_verified_at)
-				 VALUES (?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') END)`,
-			)
-			.run(
+	}): Promise<User> {
+		const row = await this.db.get(
+			`INSERT INTO users (email, name, password_hash, role, plan, email_verified_at)
+			 VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+			[
 				input.email,
 				input.name,
 				input.passwordHash,
 				input.role ?? "member",
 				input.plan ?? "free",
-				input.emailVerified ? 1 : 0,
-			);
-		return this.byId(Number(r.lastInsertRowid)) as User;
+				input.emailVerified ? timestamp() : null,
+			],
+		);
+		return (await this.byId(Number(row?.id))) as User;
 	}
 
-	byId(id: number): User | null {
-		const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Row | undefined;
+	private async one(where: string, params: Param[]): Promise<User | null> {
+		const row = await this.db.get(`SELECT * FROM users WHERE ${where}`, params);
 		return row ? toUser(row) : null;
 	}
 
-	byEmail(email: string): User | null {
-		const row = this.db.prepare("SELECT * FROM users WHERE email = ?").get(email) as Row | undefined;
-		return row ? toUser(row) : null;
+	byId(id: number): Promise<User | null> {
+		return this.one("id = ?", [id]);
 	}
 
-	byBillingCustomer(customerId: string): User | null {
-		const row = this.db.prepare("SELECT * FROM users WHERE billing_customer_id = ?").get(customerId) as Row | undefined;
-		return row ? toUser(row) : null;
+	/** Email addresses are unique and matched case-insensitively. */
+	byEmail(email: string): Promise<User | null> {
+		return this.one("LOWER(email) = LOWER(?)", [email]);
 	}
 
-	bySubscription(subscriptionId: string): User | null {
-		const row = this.db.prepare("SELECT * FROM users WHERE billing_subscription_id = ?").get(subscriptionId) as
-			| Row
-			| undefined;
-		return row ? toUser(row) : null;
+	byBillingCustomer(customerId: string): Promise<User | null> {
+		return this.one("billing_customer_id = ?", [customerId]);
+	}
+
+	bySubscription(subscriptionId: string): Promise<User | null> {
+		return this.one("billing_subscription_id = ?", [subscriptionId]);
 	}
 
 	/** The account the CLI acts as by default: the earliest admin. */
-	firstAdmin(): User | null {
-		const row = this.db.prepare("SELECT * FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get() as
-			| Row
-			| undefined;
-		return row ? toUser(row) : null;
+	firstAdmin(): Promise<User | null> {
+		return this.one("role = 'admin' ORDER BY id LIMIT 1", []);
 	}
 
 	/** Users who want a daily digest and whose default market is `exchange`, not yet sent `day`. */
-	digestRecipients(exchange: Exchange, day: string): User[] {
-		return (
-			this.db
-				.prepare(
-					`SELECT * FROM users WHERE daily_digest = 1 AND default_exchange = ?
-					 AND (last_digest_on IS NULL OR last_digest_on < ?) ORDER BY id`,
-				)
-				.all(exchange, day) as Row[]
-		).map(toUser);
+	async digestRecipients(exchange: Exchange, day: string): Promise<User[]> {
+		const rows = await this.db.all(
+			`SELECT * FROM users WHERE daily_digest = 1 AND default_exchange = ?
+			 AND (last_digest_on IS NULL OR last_digest_on < ?) ORDER BY id`,
+			[exchange, day],
+		);
+		return rows.map(toUser);
 	}
 
-	byTelegramChat(chatId: string): User | null {
-		const row = this.db.prepare("SELECT * FROM users WHERE telegram_chat_id = ?").get(chatId) as Row | undefined;
-		return row ? toUser(row) : null;
+	byTelegramChat(chatId: string): Promise<User | null> {
+		return this.one("telegram_chat_id = ?", [chatId]);
 	}
 
-	list(): User[] {
-		return (this.db.prepare("SELECT * FROM users ORDER BY id").all() as Row[]).map(toUser);
+	async list(): Promise<User[]> {
+		return (await this.db.all("SELECT * FROM users ORDER BY id")).map(toUser);
 	}
 
-	passwordHash(id: number): string | null {
-		const row = this.db.prepare("SELECT password_hash FROM users WHERE id = ?").get(id) as
-			| { password_hash: string }
-			| undefined;
-		return row?.password_hash ?? null;
+	async passwordHash(id: number): Promise<string | null> {
+		const row = await this.db.get("SELECT password_hash FROM users WHERE id = ?", [id]);
+		return str(row?.password_hash);
 	}
 
-	update(id: number, patch: UserPatch): User {
+	async update(id: number, patch: UserPatch): Promise<User> {
 		const entries = Object.entries(patch).filter(([k, v]) => k in UPDATABLE && v !== undefined);
 		if (entries.length > 0) {
 			const sets = entries.map(([k]) => `${UPDATABLE[k as keyof typeof UPDATABLE]} = ?`).join(", ");
-			const values = entries.map(([, v]) => (typeof v === "boolean" ? (v ? 1 : 0) : (v as SQLInputValue)));
-			this.db.prepare(`UPDATE users SET ${sets} WHERE id = ?`).run(...values, id);
+			const values = entries.map(([, v]) => (typeof v === "boolean" ? (v ? 1 : 0) : (v as Param)));
+			await this.db.run(`UPDATE users SET ${sets} WHERE id = ?`, [...values, id]);
 		}
-		return this.byId(id) as User;
+		return (await this.byId(id)) as User;
 	}
 
-	setPassword(id: number, passwordHash: string) {
-		this.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, id);
+	async setPassword(id: number, passwordHash: string): Promise<void> {
+		await this.db.run("UPDATE users SET password_hash = ? WHERE id = ?", [passwordHash, id]);
 	}
 
-	touchLogin(id: number) {
-		this.db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(id);
+	async touchLogin(id: number): Promise<void> {
+		await this.db.run("UPDATE users SET last_login_at = ? WHERE id = ?", [timestamp(), id]);
 	}
 
-	delete(id: number): boolean {
-		return Number(this.db.prepare("DELETE FROM users WHERE id = ?").run(id).changes) > 0;
+	async delete(id: number): Promise<boolean> {
+		return (await this.db.run("DELETE FROM users WHERE id = ?", [id])).changes > 0;
 	}
 
 	/** Hand watchlist/alert rows created before accounts existed (v2.0) to this user. */
-	claimUnownedData(userId: number): { watchlist: number; alerts: number } {
-		return this.db.transaction(() => ({
-			watchlist: Number(this.db.prepare("UPDATE watchlist SET user_id = ? WHERE user_id IS NULL").run(userId).changes),
-			alerts: Number(this.db.prepare("UPDATE alerts SET user_id = ? WHERE user_id IS NULL").run(userId).changes),
+	claimUnownedData(userId: number): Promise<{ watchlist: number; alerts: number }> {
+		return this.db.transaction(async () => ({
+			watchlist: (await this.db.run("UPDATE watchlist SET user_id = ? WHERE user_id IS NULL", [userId])).changes,
+			alerts: (await this.db.run("UPDATE alerts SET user_id = ? WHERE user_id IS NULL", [userId])).changes,
 		}));
 	}
 
 	// -- Sessions ----------------------------------------------------------------
 
-	createSession(id: string, userId: number, ttlSeconds: number, meta: { userAgent?: string; ip?: string }) {
-		this.db
-			.prepare("INSERT INTO sessions (id, user_id, user_agent, ip, expires_at) VALUES (?, ?, ?, ?, datetime('now', ?))")
-			.run(id, userId, meta.userAgent?.slice(0, 300) ?? null, meta.ip ?? null, inSeconds(ttlSeconds));
+	async createSession(
+		id: string,
+		userId: number,
+		ttlSeconds: number,
+		meta: { userAgent?: string; ip?: string },
+	): Promise<void> {
+		await this.db.run("INSERT INTO sessions (id, user_id, user_agent, ip, expires_at) VALUES (?, ?, ?, ?, ?)", [
+			id,
+			userId,
+			meta.userAgent?.slice(0, 300) ?? null,
+			meta.ip ?? null,
+			inSeconds(ttlSeconds),
+		]);
 	}
 
 	/** The live session's user, or null when unknown or expired. */
-	sessionUser(id: string): { user: User; lastSeenAt: string } | null {
-		const row = this.db
-			.prepare(
-				`SELECT u.*, s.last_seen_at AS session_last_seen FROM sessions s JOIN users u ON u.id = s.user_id
-				 WHERE s.id = ? AND s.expires_at > datetime('now')`,
-			)
-			.get(id) as Row | undefined;
+	async sessionUser(id: string): Promise<{ user: User; lastSeenAt: string } | null> {
+		const row = await this.db.get(
+			`SELECT u.*, s.last_seen_at AS session_last_seen FROM sessions s JOIN users u ON u.id = s.user_id
+			 WHERE s.id = ? AND s.expires_at > ?`,
+			[id, timestamp()],
+		);
 		return row ? { user: toUser(row), lastSeenAt: String(row.session_last_seen) } : null;
 	}
 
 	/** Sliding expiry: extend a session that is still in use. */
-	touchSession(id: string, ttlSeconds: number) {
-		this.db
-			.prepare("UPDATE sessions SET last_seen_at = datetime('now'), expires_at = datetime('now', ?) WHERE id = ?")
-			.run(inSeconds(ttlSeconds), id);
+	async touchSession(id: string, ttlSeconds: number): Promise<void> {
+		await this.db.run("UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?", [
+			timestamp(),
+			inSeconds(ttlSeconds),
+			id,
+		]);
 	}
 
-	deleteSession(id: string) {
-		this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+	async deleteSession(id: string): Promise<void> {
+		await this.db.run("DELETE FROM sessions WHERE id = ?", [id]);
 	}
 
 	/** Sign out everywhere, optionally keeping the current session. */
-	deleteSessions(userId: number, exceptId?: string): number {
-		return Number(
-			this.db.prepare("DELETE FROM sessions WHERE user_id = ? AND id != ?").run(userId, exceptId ?? "").changes,
-		);
+	async deleteSessions(userId: number, exceptId?: string): Promise<number> {
+		return (await this.db.run("DELETE FROM sessions WHERE user_id = ? AND id != ?", [userId, exceptId ?? ""])).changes;
 	}
 
-	listSessions(userId: number): SessionInfo[] {
-		return this.db
-			.prepare(
-				`SELECT id, user_agent AS userAgent, ip, created_at AS createdAt, last_seen_at AS lastSeenAt, expires_at AS expiresAt
-				 FROM sessions WHERE user_id = ? AND expires_at > datetime('now') ORDER BY last_seen_at DESC`,
-			)
-			.all(userId) as unknown as SessionInfo[];
+	async listSessions(userId: number): Promise<SessionInfo[]> {
+		const rows = await this.db.all(
+			`SELECT id, user_agent, ip, created_at, last_seen_at, expires_at
+			 FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_seen_at DESC`,
+			[userId, timestamp()],
+		);
+		return rows.map((r) => ({
+			id: String(r.id),
+			userAgent: str(r.user_agent),
+			ip: str(r.ip),
+			createdAt: String(r.created_at),
+			lastSeenAt: String(r.last_seen_at),
+			expiresAt: String(r.expires_at),
+		}));
 	}
 
-	purgeExpired(): number {
-		return this.db.transaction(
-			() =>
-				Number(this.db.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')").run().changes) +
-				Number(this.db.prepare("DELETE FROM auth_tokens WHERE expires_at <= datetime('now')").run().changes),
-		);
+	purgeExpired(): Promise<number> {
+		return this.db.transaction(async () => {
+			const now = timestamp();
+			const sessions = await this.db.run("DELETE FROM sessions WHERE expires_at <= ?", [now]);
+			const tokens = await this.db.run("DELETE FROM auth_tokens WHERE expires_at <= ?", [now]);
+			return sessions.changes + tokens.changes;
+		});
 	}
 
 	// -- One-time tokens (email verification, password reset) ----------------------
 
-	createAuthToken(id: string, userId: number, purpose: AuthTokenPurpose, ttlSeconds: number) {
-		this.db.transaction(() => {
+	createAuthToken(id: string, userId: number, purpose: AuthTokenPurpose, ttlSeconds: number): Promise<void> {
+		return this.db.transaction(async () => {
 			// Only the newest link of each kind works.
-			this.db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?").run(userId, purpose);
-			this.db
-				.prepare("INSERT INTO auth_tokens (id, user_id, purpose, expires_at) VALUES (?, ?, ?, datetime('now', ?))")
-				.run(id, userId, purpose, inSeconds(ttlSeconds));
+			await this.db.run("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?", [userId, purpose]);
+			await this.db.run("INSERT INTO auth_tokens (id, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)", [
+				id,
+				userId,
+				purpose,
+				inSeconds(ttlSeconds),
+			]);
 		});
 	}
 
-	/** Single use: the token is deleted whether or not it was still valid. */
-	consumeAuthToken(id: string, purpose: AuthTokenPurpose): number | null {
-		return this.db.transaction(() => {
-			const row = this.db
-				.prepare("SELECT user_id, expires_at > datetime('now') AS live FROM auth_tokens WHERE id = ? AND purpose = ?")
-				.get(id, purpose) as { user_id: number; live: number } | undefined;
-			if (!row) return null;
-			this.db.prepare("DELETE FROM auth_tokens WHERE id = ?").run(id);
-			return row.live ? row.user_id : null;
-		});
+	/**
+	 * Single use: the token is deleted whether or not it was still valid. One DELETE ... RETURNING, so two
+	 * simultaneous requests can't both redeem it.
+	 */
+	async consumeAuthToken(id: string, purpose: AuthTokenPurpose): Promise<number | null> {
+		const row = await this.db.get(
+			"DELETE FROM auth_tokens WHERE id = ? AND purpose = ? RETURNING user_id, expires_at",
+			[id, purpose],
+		);
+		if (!row) return null;
+		return String(row.expires_at) > timestamp() ? Number(row.user_id) : null;
 	}
 
 	// -- Personal API tokens -------------------------------------------------------
 
-	createApiToken(userId: number, name: string, tokenHash: string, prefix: string): ApiTokenInfo {
-		const r = this.db
-			.prepare("INSERT INTO api_tokens (user_id, name, token_hash, prefix) VALUES (?, ?, ?, ?)")
-			.run(userId, name, tokenHash, prefix);
-		return this.listApiTokens(userId).find((t) => t.id === Number(r.lastInsertRowid)) as ApiTokenInfo;
+	async createApiToken(userId: number, name: string, tokenHash: string, prefix: string): Promise<ApiTokenInfo> {
+		const row = await this.db.get(
+			"INSERT INTO api_tokens (user_id, name, token_hash, prefix) VALUES (?, ?, ?, ?) RETURNING id",
+			[userId, name, tokenHash, prefix],
+		);
+		return (await this.listApiTokens(userId)).find((t) => t.id === Number(row?.id)) as ApiTokenInfo;
 	}
 
-	apiTokenUser(tokenHash: string): User | null {
-		const row = this.db
-			.prepare("SELECT u.*, t.id AS token_id FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?")
-			.get(tokenHash) as Row | undefined;
+	async apiTokenUser(tokenHash: string): Promise<User | null> {
+		const row = await this.db.get(
+			"SELECT u.*, t.id AS token_id FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
+			[tokenHash],
+		);
 		if (!row) return null;
-		this.db.prepare("UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?").run(Number(row.token_id));
+		await this.db.run("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", [timestamp(), Number(row.token_id)]);
 		return toUser(row);
 	}
 
-	listApiTokens(userId: number): ApiTokenInfo[] {
-		return this.db
-			.prepare(
-				`SELECT id, name, prefix, created_at AS createdAt, last_used_at AS lastUsedAt
-				 FROM api_tokens WHERE user_id = ? ORDER BY id DESC`,
-			)
-			.all(userId) as unknown as ApiTokenInfo[];
+	async listApiTokens(userId: number): Promise<ApiTokenInfo[]> {
+		const rows = await this.db.all(
+			"SELECT id, name, prefix, created_at, last_used_at FROM api_tokens WHERE user_id = ? ORDER BY id DESC",
+			[userId],
+		);
+		return rows.map((r) => ({
+			id: Number(r.id),
+			name: String(r.name),
+			prefix: String(r.prefix),
+			createdAt: String(r.created_at),
+			lastUsedAt: str(r.last_used_at),
+		}));
 	}
 
-	deleteApiToken(userId: number, id: number): boolean {
-		return Number(this.db.prepare("DELETE FROM api_tokens WHERE id = ? AND user_id = ?").run(id, userId).changes) > 0;
+	async deleteApiToken(userId: number, id: number): Promise<boolean> {
+		return (await this.db.run("DELETE FROM api_tokens WHERE id = ? AND user_id = ?", [id, userId])).changes > 0;
 	}
 }
 
 function toUser(r: Row): User {
-	const str = (v: SQLInputValue | undefined) => (v === null || v === undefined ? null : String(v));
 	return {
 		id: Number(r.id),
 		email: String(r.email),
@@ -310,12 +326,12 @@ function toUser(r: Row): User {
 		emailVerifiedAt: str(r.email_verified_at),
 		onboardedAt: str(r.onboarded_at),
 		defaultExchange: r.default_exchange as Exchange,
-		emailAlerts: Boolean(r.email_alerts),
+		emailAlerts: flag(r.email_alerts),
 		telegramChatId: str(r.telegram_chat_id),
 		discordWebhookUrl: str(r.discord_webhook_url),
 		billingCustomerId: str(r.billing_customer_id),
 		billingSubscriptionId: str(r.billing_subscription_id),
-		dailyDigest: Boolean(r.daily_digest),
+		dailyDigest: flag(r.daily_digest),
 		lastDigestOn: str(r.last_digest_on),
 		createdAt: String(r.created_at),
 		lastLoginAt: str(r.last_login_at),

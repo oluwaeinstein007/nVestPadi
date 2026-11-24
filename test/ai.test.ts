@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import type { AIProvider, ChatMessage } from "../src/ai/provider.js";
 import { InsightService } from "../src/services/insightService.js";
 import { KnowledgeBase } from "../src/services/knowledgeBase.js";
 import { MarketService } from "../src/services/marketService.js";
 import type { SearchHit, VectorPoint, VectorStore } from "../src/storage/vectorStore.js";
-import { memoryDb, security, seed } from "./helpers.js";
-import { marketOptions } from "./helpers.js";
+import { dropTestDatabases, marketOptions, memoryDb, security, seed } from "./helpers.js";
+
+after(dropTestDatabases);
 
 class StubAI implements AIProvider {
 	readonly name = "stub";
@@ -37,9 +38,9 @@ class StubVectors {
 
 const closes = Array.from({ length: 70 }, (_, i) => 100 + i);
 
-function setup() {
-	const db = memoryDb();
-	seed(db, [{ s: security("GTCO", "Guaranty Trust Holding Company Plc", "Financial Services"), closes }]);
+async function setup() {
+	const db = await memoryDb();
+	await seed(db, [{ s: security("GTCO", "Guaranty Trust Holding Company Plc", "Financial Services"), closes }]);
 	const ai = new StubAI();
 	const vectors = new StubVectors();
 	const kb = new KnowledgeBase(db, ai, vectors as unknown as VectorStore);
@@ -49,7 +50,7 @@ function setup() {
 
 describe("knowledge base indexing", () => {
 	it("embeds only new or changed chunks", async () => {
-		const { ai, vectors, kb } = setup();
+		const { ai, vectors, kb } = await setup();
 		const item = (id: string, text: string) => ({
 			id,
 			text,
@@ -65,7 +66,7 @@ describe("knowledge base indexing", () => {
 	});
 
 	it("drops legacy points that carry no text", async () => {
-		const { vectors, kb } = setup();
+		const { vectors, kb } = await setup();
 		vectors.hits = [
 			{ id: "old", score: 0.9, payload: { stock_symbol: "X" } as never },
 			{ id: "new", score: 0.8, payload: { kind: "web", source: "s", title: "t", content: "text", indexedAt: "" } },
@@ -79,7 +80,7 @@ describe("knowledge base indexing", () => {
 
 describe("ask", () => {
 	it("grounds the answer in the symbol report and retrieved documents, with numbered sources", async () => {
-		const { ai, vectors, insights } = setup();
+		const { ai, vectors, insights } = await setup();
 		vectors.hits = [
 			{
 				id: "d1",
@@ -108,7 +109,7 @@ describe("ask", () => {
 	});
 
 	it("explains what to do when there is no data at all", async () => {
-		const db = memoryDb();
+		const db = await memoryDb();
 		const ai = new StubAI();
 		const kb = new KnowledgeBase(db, ai, null);
 		const answer = await new InsightService(db, ai, kb, new MarketService(db, kb, marketOptions)).ask(

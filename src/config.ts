@@ -34,13 +34,27 @@ export interface QdrantConfig {
 	collection: string;
 }
 
+/** Where data lives: a local SQLite file (default) or a PostgreSQL server. */
+export type DatabaseConfig =
+	| { kind: "sqlite"; path: string }
+	| { kind: "postgres"; url: string; caCert?: string; poolMax: number };
+
+/** Human-readable location for logs and `nvest doctor`, never including the password. */
+export function describeDatabase(db: DatabaseConfig): string {
+	if (db.kind === "sqlite") return `SQLite ${db.path}`;
+	const url = new URL(db.url);
+	return `PostgreSQL ${url.username ? `${decodeURIComponent(url.username)}@` : ""}${url.host}${url.pathname}`;
+}
+
+const isPostgresUrl = (value: string) => /^postgres(ql)?:\/\//i.test(value);
+
 export interface Config {
 	env: "development" | "production" | "test";
 	mode: AppMode;
 	logLevel: "debug" | "info" | "warn" | "error";
 	/** Public base URL, used in emails and payment redirects (no trailing slash). */
 	appUrl: string;
-	databasePath: string;
+	database: DatabaseConfig;
 	ai: AIConfig | null;
 	qdrant: QdrantConfig | null;
 	markets: { usSymbols: string[] };
@@ -117,6 +131,15 @@ const EnvSchema = z
 		APP_URL: z.string().url().optional(),
 		LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 		DATABASE_PATH: z.string().default("data/nvestpadi.db"),
+		DATABASE_URL: z
+			.string()
+			.refine(
+				isPostgresUrl,
+				"must be a PostgreSQL URL (postgres://user:password@host:5432/dbname); for SQLite use DATABASE_PATH",
+			)
+			.optional(),
+		DATABASE_CA_CERT: z.string().optional(),
+		DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).default(5),
 
 		AI_PROVIDER: z.enum(["openai", "gemini"]).optional(),
 		AI_API_KEY: z.string().optional(),
@@ -246,12 +269,30 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 		.filter(([key]) => cleaned[key])
 		.map(([key, instead]) => `${key} is no longer used — ${instead}.`);
 
+	// DATABASE_URL wins. A PostgreSQL URL in DATABASE_PATH is an easy mistake, so honour it and say what to change.
+	let postgresUrl = env.DATABASE_URL;
+	if (!postgresUrl && isPostgresUrl(env.DATABASE_PATH)) {
+		postgresUrl = env.DATABASE_PATH;
+		warnings.push(
+			"DATABASE_PATH holds a PostgreSQL URL — move it to DATABASE_URL (DATABASE_PATH is for SQLite files).",
+		);
+	}
+	const database: DatabaseConfig = postgresUrl
+		? {
+				kind: "postgres",
+				url: postgresUrl,
+				// Single-line env vars can't hold newlines, so accept a literal "\n" in the PEM.
+				caCert: env.DATABASE_CA_CERT?.replace(/\\n/g, "\n"),
+				poolMax: env.DATABASE_POOL_MAX,
+			}
+		: { kind: "sqlite", path: env.DATABASE_PATH === ":memory:" ? env.DATABASE_PATH : path.resolve(env.DATABASE_PATH) };
+
 	return {
 		env: env.NODE_ENV,
 		mode: env.APP_MODE,
 		logLevel: env.LOG_LEVEL,
 		appUrl,
-		databasePath: env.DATABASE_PATH === ":memory:" ? env.DATABASE_PATH : path.resolve(env.DATABASE_PATH),
+		database,
 		ai,
 		qdrant: env.QDRANT_URL
 			? {

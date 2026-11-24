@@ -80,12 +80,14 @@ export const marketCommands: Record<string, Command> = {
 		async run(app, args, flags, json) {
 			if (args.length === 0) throw new UsageError("Missing SYMBOL");
 			const exchange = parseExchange(str(flags.exchange));
-			const quotes = args.map((s) => {
-				const t = app.market.resolve(s, exchange);
-				const q = app.db.market.latestQuote(t.exchange, t.symbol);
-				if (!q) throw new SymbolNotFoundError(t.symbol, t.exchange);
-				return q;
-			});
+			const quotes = await Promise.all(
+				args.map(async (s) => {
+					const t = await app.market.resolve(s, exchange);
+					const q = await app.db.market.latestQuote(t.exchange, t.symbol);
+					if (!q) throw new SymbolNotFoundError(t.symbol, t.exchange);
+					return q;
+				}),
+			);
 			if (json) return quotes;
 			out(
 				table(quotes, [
@@ -109,7 +111,7 @@ export const marketCommands: Record<string, Command> = {
 			const r = await app.market.report(symbol, parseExchange(str(flags.exchange)));
 			if (json) return r;
 			const i = r.indicators;
-			const closes = app.db.market.history(r.security.exchange, r.security.symbol, 120).map((b) => b.close);
+			const closes = (await app.db.market.history(r.security.exchange, r.security.symbol, 120)).map((b) => b.close);
 			out(
 				heading(
 					`${r.security.name}`,
@@ -167,7 +169,7 @@ export const marketCommands: Record<string, Command> = {
 		options: { ...exchangeFlag, top: { type: "string" } },
 		async run(app, _args, flags, json) {
 			const exchange = parseExchange(str(flags.exchange)) ?? "NGX";
-			const o = marketOverview(app.db, exchange, num(flags.top, "top") ?? 5);
+			const o = await marketOverview(app.db, exchange, num(flags.top, "top") ?? 5);
 			if (json) return o;
 			if (o.count === 0) {
 				out(`No ${exchange} data yet. Run ${c.bold(`nvest sync ${exchange.toLowerCase()}`)} first.`);
@@ -227,7 +229,7 @@ export const marketCommands: Record<string, Command> = {
 			const sort = str(flags.sort) ?? "gainers";
 			if (!(SCREEN_SORTS as readonly string[]).includes(sort))
 				throw new UsageError(`--sort must be one of: ${SCREEN_SORTS.join(", ")}`);
-			const rows = screen(app.db, {
+			const rows = await screen(app.db, {
 				exchange: parseExchange(str(flags.exchange)) ?? "NGX",
 				sector: str(flags.sector),
 				query: str(flags.search),

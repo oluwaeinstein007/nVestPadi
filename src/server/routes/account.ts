@@ -14,14 +14,14 @@ export function accountRoutes(r: Router, app: App) {
 
 	r.get("/api/account", (ctx) => app.accounts.overview(ctx.user));
 
-	r.patch("/api/account", (ctx) => {
+	r.patch("/api/account", async (ctx) => {
 		const b = z
 			.object({ name: z.string().max(80).optional(), defaultExchange: exchangeSchema.optional() })
 			.parse(ctx.body);
-		return { user: toPublicUser(app.accounts.updateProfile(ctx.user, b)) };
+		return { user: toPublicUser(await app.accounts.updateProfile(ctx.user, b)) };
 	});
 
-	r.put("/api/account/notifications", (ctx) => {
+	r.put("/api/account/notifications", async (ctx) => {
 		const b = z
 			.object({
 				emailAlerts: z.boolean().optional(),
@@ -29,8 +29,8 @@ export function accountRoutes(r: Router, app: App) {
 				discordWebhookUrl: z.string().max(300).nullable().optional(),
 			})
 			.parse(ctx.body);
-		app.accounts.updateNotifications(ctx.user, b);
-		return app.accounts.overview(app.db.users.byId(ctx.user.id) ?? ctx.user).notifications;
+		const updated = await app.accounts.updateNotifications(ctx.user, b);
+		return (await app.accounts.overview(updated)).notifications;
 	});
 
 	r.post(
@@ -43,8 +43,8 @@ export function accountRoutes(r: Router, app: App) {
 
 	// Telegram is linked by opening a one-time t.me deep link, never by typing a chat id.
 	r.post("/api/account/telegram/link", async (ctx) => ({ url: await app.bots.telegramLink(ctx.user) }));
-	r.delete("/api/account/telegram", (ctx) => {
-		app.db.users.update(ctx.user.id, { telegramChatId: null });
+	r.delete("/api/account/telegram", async (ctx) => {
+		await app.db.users.update(ctx.user.id, { telegramChatId: null });
 		return { linked: false };
 	});
 
@@ -66,8 +66,8 @@ export function accountRoutes(r: Router, app: App) {
 	);
 
 	r.get("/api/account/sessions", (ctx) => app.accounts.sessions(ctx.user, ctx.principal?.sessionId ?? undefined));
-	r.delete("/api/account/sessions", (ctx) => ({
-		signedOut: app.accounts.signOutOtherSessions(ctx.user, ctx.principal?.sessionId ?? undefined),
+	r.delete("/api/account/sessions", async (ctx) => ({
+		signedOut: await app.accounts.signOutOtherSessions(ctx.user, ctx.principal?.sessionId ?? undefined),
 	}));
 
 	r.get("/api/account/tokens", (ctx) => app.accounts.apiTokens(ctx.user));
@@ -75,8 +75,8 @@ export function accountRoutes(r: Router, app: App) {
 		const { name } = z.object({ name: z.string().max(60) }).parse(ctx.body);
 		return app.accounts.createApiToken(ctx.user, name);
 	});
-	r.delete("/api/account/tokens/:id", (ctx) => {
-		app.accounts.revokeApiToken(ctx.user, Number(ctx.params.id));
+	r.delete("/api/account/tokens/:id", async (ctx) => {
+		await app.accounts.revokeApiToken(ctx.user, Number(ctx.params.id));
 		return { revoked: Number(ctx.params.id) };
 	});
 

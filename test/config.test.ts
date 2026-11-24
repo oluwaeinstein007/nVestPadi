@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ConfigError, DEFAULT_US_SYMBOLS, parseConfig } from "../src/config.js";
+import { ConfigError, DEFAULT_US_SYMBOLS, describeDatabase, parseConfig } from "../src/config.js";
 
 describe("config", () => {
 	it("works with an empty environment", () => {
@@ -76,6 +76,19 @@ describe("config", () => {
 	});
 
 	it("keeps :memory: database paths as-is", () => {
-		assert.equal(parseConfig({ DATABASE_PATH: ":memory:" }).databasePath, ":memory:");
+		assert.deepEqual(parseConfig({ DATABASE_PATH: ":memory:" }).database, { kind: "sqlite", path: ":memory:" });
+	});
+
+	it("selects PostgreSQL from DATABASE_URL and never leaks the password", () => {
+		const c = parseConfig({ DATABASE_URL: "postgres://app:s3cret@db.example.com:5432/nvp?sslmode=require" });
+		assert.equal(c.database.kind, "postgres");
+		assert.equal(describeDatabase(c.database), "PostgreSQL app@db.example.com:5432/nvp");
+		assert.throws(() => parseConfig({ DATABASE_URL: "mysql://x/y" }), ConfigError);
+	});
+
+	it("honours a PostgreSQL URL mistakenly put in DATABASE_PATH, with a warning", () => {
+		const c = parseConfig({ DATABASE_PATH: "postgres://app:pw@db.example.com/nvp" });
+		assert.equal(c.database.kind, "postgres");
+		assert.match(c.warnings[0] ?? "", /move it to DATABASE_URL/);
 	});
 });

@@ -20,13 +20,13 @@ export function platformRoutes(r: Router, app: App) {
 	// Liveness + readiness: fails (500) if the database can't be queried.
 	r.get(
 		"/api/health",
-		() => {
-			app.db.ping();
+		async () => {
+			await app.db.ping();
 			return { status: "ok", version: VERSION, uptimeSeconds: Math.round((Date.now() - startedAt) / 1000) };
 		},
 		{ access: "public" },
 	);
-	r.get("/api/status", () => ({
+	r.get("/api/status", async () => ({
 		version: VERSION,
 		mode: app.config.mode,
 		features: {
@@ -34,7 +34,7 @@ export function platformRoutes(r: Router, app: App) {
 			search: app.kb.enabled,
 			billing: app.billing.enabled,
 		},
-		data: { lastPriceDate: app.db.stats().lastPriceDate },
+		data: { lastPriceDate: (await app.db.stats()).lastPriceDate },
 		markets: EXCHANGES.map((id) => ({ id, name: MARKET_NAMES[id], currency: CURRENCY[id] })),
 		alertConditions: ALERT_CONDITIONS,
 		screenSorts: SCREEN_SORTS,
@@ -47,13 +47,13 @@ export function platformRoutes(r: Router, app: App) {
 			const b = z
 				.object({ question: z.string().trim().min(3).max(1000), exchange: z.string().optional() })
 				.parse(ctx.body);
-			const refund = app.accounts.meterAiQuestion(ctx.user);
+			const refund = await app.accounts.meterAiQuestion(ctx.user);
 			try {
 				return await app.insights.ask(b.question, {
 					exchange: b.exchange ? exchangeSchema.parse(b.exchange) : undefined,
 				});
 			} catch (err) {
-				refund(); // don't charge a question for our own failure
+				await refund().catch(() => undefined); // don't charge a question for our own failure
 				throw err;
 			}
 		},
@@ -69,12 +69,12 @@ export function platformRoutes(r: Router, app: App) {
 	r.post("/api/billing/portal", async (ctx) => ({ url: await app.billing.manageUrl(ctx.user) }));
 	r.post(
 		"/api/billing/webhook",
-		(ctx) => {
+		async (ctx) => {
 			const signature = ctx.req.headers["x-paystack-signature"];
 			if (!app.billing.verifySignature(ctx.rawBody, typeof signature === "string" ? signature : undefined)) {
 				throw new UnauthorizedError("Invalid signature");
 			}
-			const result = app.billing.handleEvent(ctx.body as Parameters<App["billing"]["handleEvent"]>[0]);
+			const result = await app.billing.handleEvent(ctx.body as Parameters<App["billing"]["handleEvent"]>[0]);
 			if (result) logger.info("billing updated", result);
 			return { received: true };
 		},
@@ -102,10 +102,10 @@ export function platformRoutes(r: Router, app: App) {
 	);
 	r.get(
 		"/api/admin/overview",
-		() => {
-			const users = app.db.users.list();
+		async () => {
+			const users = await app.db.users.list();
 			return {
-				stats: app.db.stats(),
+				stats: await app.db.stats(),
 				users: {
 					total: users.length,
 					pro: users.filter((u) => u.plan === "pro").length,

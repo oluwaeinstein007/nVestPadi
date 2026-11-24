@@ -31,10 +31,10 @@ export function authRoutes(r: Router, app: App) {
 	// Everything the browser needs to render auth pages and decide where to go.
 	r.get(
 		"/api/auth/session",
-		(ctx) => ({
+		async (ctx) => ({
 			user: ctx.principal ? toPublicUser(ctx.principal.user) : null,
 			mode: app.config.mode,
-			signup: app.auth.signupStatus(),
+			signup: await app.auth.signupStatus(),
 			billing: app.billing.enabled,
 			emailDelivers: app.mailer.delivers,
 			plans: Object.values(PLANS).map(({ id, name, priceLabel, tagline, limits }) => ({
@@ -84,8 +84,8 @@ export function authRoutes(r: Router, app: App) {
 
 	r.post(
 		"/api/auth/logout",
-		(ctx) => {
-			if (ctx.sessionToken) app.auth.logout(ctx.sessionToken);
+		async (ctx) => {
+			if (ctx.sessionToken) await app.auth.logout(ctx.sessionToken);
 			setSession(ctx, null);
 			return { ok: true };
 		},
@@ -116,9 +116,9 @@ export function authRoutes(r: Router, app: App) {
 
 	r.post(
 		"/api/auth/verify-email",
-		(ctx) => {
+		async (ctx) => {
 			const { token } = z.object({ token: z.string().min(10) }).parse(ctx.body);
-			return { user: toPublicUser(app.auth.verifyEmail(token)) };
+			return { user: toPublicUser(await app.auth.verifyEmail(token)) };
 		},
 		{ access: "public", limit: perIp },
 	);

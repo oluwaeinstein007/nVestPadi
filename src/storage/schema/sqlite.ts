@@ -1,8 +1,9 @@
 /**
- * Ordered schema migrations, applied in transactions and tracked with
- * `PRAGMA user_version`. Append new entries; never edit an existing one.
+ * SQLite schema migrations, applied in transactions and tracked with `PRAGMA user_version`.
+ * Append new entries; never edit an existing one — real databases are already past them.
+ * Keep `postgres.ts` in step: every change here needs the equivalent there.
  */
-export const MIGRATIONS: string[] = [
+export const SQLITE_MIGRATIONS: string[] = [
 	// 1 — v2.0: market data, knowledge-base ledger, single-user watchlist and alerts
 	`
 	CREATE TABLE securities (

@@ -1,5 +1,7 @@
 import type { Exchange } from "../../markets/types.js";
-import type { Database } from "../database.js";
+import type { Database, Row } from "../database.js";
+import { timestamp } from "../driver.js";
+import { str } from "../rows.js";
 
 export interface Holding {
 	id: number;
@@ -12,63 +14,70 @@ export interface Holding {
 	updatedAt: string;
 }
 
-const COLUMNS =
-	"id, exchange, symbol, quantity, avg_cost AS avgCost, note, created_at AS createdAt, updated_at AS updatedAt";
-
 /** Per-user portfolio positions (one row per security; adding again averages the cost). */
 export class HoldingsRepository {
 	constructor(private readonly db: Database) {}
 
-	list(userId: number): Holding[] {
-		return this.db
-			.prepare(`SELECT ${COLUMNS} FROM holdings WHERE user_id = ? ORDER BY exchange, symbol`)
-			.all(userId) as unknown as Holding[];
+	async list(userId: number): Promise<Holding[]> {
+		const rows = await this.db.all("SELECT * FROM holdings WHERE user_id = ? ORDER BY exchange, symbol", [userId]);
+		return rows.map(toHolding);
 	}
 
-	get(userId: number, id: number): Holding | null {
-		return (
-			(this.db.prepare(`SELECT ${COLUMNS} FROM holdings WHERE user_id = ? AND id = ?`).get(userId, id) as unknown as
-				| Holding
-				| undefined) ?? null
-		);
+	async get(userId: number, id: number): Promise<Holding | null> {
+		const row = await this.db.get("SELECT * FROM holdings WHERE user_id = ? AND id = ?", [userId, id]);
+		return row ? toHolding(row) : null;
 	}
 
-	find(userId: number, exchange: Exchange, symbol: string): Holding | null {
-		return (
-			(this.db
-				.prepare(`SELECT ${COLUMNS} FROM holdings WHERE user_id = ? AND exchange = ? AND symbol = ?`)
-				.get(userId, exchange, symbol.toUpperCase()) as unknown as Holding | undefined) ?? null
-		);
+	async find(userId: number, exchange: Exchange, symbol: string): Promise<Holding | null> {
+		const row = await this.db.get("SELECT * FROM holdings WHERE user_id = ? AND exchange = ? AND symbol = ?", [
+			userId,
+			exchange,
+			symbol.toUpperCase(),
+		]);
+		return row ? toHolding(row) : null;
 	}
 
-	count(userId: number): number {
-		return (this.db.prepare("SELECT COUNT(*) AS n FROM holdings WHERE user_id = ?").get(userId) as { n: number }).n;
+	count(userId: number): Promise<number> {
+		return this.db.count("SELECT COUNT(*) AS n FROM holdings WHERE user_id = ?", [userId]);
 	}
 
-	insert(
+	async insert(
 		userId: number,
 		h: { exchange: Exchange; symbol: string; quantity: number; avgCost: number; note?: string },
-	): Holding {
-		const r = this.db
-			.prepare("INSERT INTO holdings (user_id, exchange, symbol, quantity, avg_cost, note) VALUES (?, ?, ?, ?, ?, ?)")
-			.run(userId, h.exchange, h.symbol.toUpperCase(), h.quantity, h.avgCost, h.note ?? null);
-		return this.get(userId, Number(r.lastInsertRowid)) as Holding;
+	): Promise<Holding> {
+		const row = await this.db.get(
+			"INSERT INTO holdings (user_id, exchange, symbol, quantity, avg_cost, note) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+			[userId, h.exchange, h.symbol.toUpperCase(), h.quantity, h.avgCost, h.note ?? null],
+		);
+		return (await this.get(userId, Number(row?.id))) as Holding;
 	}
 
-	update(
+	async update(
 		userId: number,
 		id: number,
 		patch: { quantity: number; avgCost: number; note?: string | null },
-	): Holding | null {
-		this.db
-			.prepare(
-				"UPDATE holdings SET quantity = ?, avg_cost = ?, note = COALESCE(?, note), updated_at = datetime('now') WHERE id = ? AND user_id = ?",
-			)
-			.run(patch.quantity, patch.avgCost, patch.note ?? null, id, userId);
+	): Promise<Holding | null> {
+		await this.db.run(
+			"UPDATE holdings SET quantity = ?, avg_cost = ?, note = COALESCE(?, note), updated_at = ? WHERE id = ? AND user_id = ?",
+			[patch.quantity, patch.avgCost, patch.note ?? null, timestamp(), id, userId],
+		);
 		return this.get(userId, id);
 	}
 
-	delete(userId: number, id: number): boolean {
-		return Number(this.db.prepare("DELETE FROM holdings WHERE id = ? AND user_id = ?").run(id, userId).changes) > 0;
+	async delete(userId: number, id: number): Promise<boolean> {
+		return (await this.db.run("DELETE FROM holdings WHERE id = ? AND user_id = ?", [id, userId])).changes > 0;
 	}
+}
+
+function toHolding(r: Row): Holding {
+	return {
+		id: Number(r.id),
+		exchange: r.exchange as Exchange,
+		symbol: String(r.symbol),
+		quantity: Number(r.quantity),
+		avgCost: Number(r.avg_cost),
+		note: str(r.note),
+		createdAt: String(r.created_at),
+		updatedAt: String(r.updated_at),
+	};
 }

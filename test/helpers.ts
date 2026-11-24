@@ -1,11 +1,49 @@
+import pg from "pg";
+import type { DatabaseConfig } from "../src/config.js";
 import { CoinGecko } from "../src/markets/coingecko.js";
 import type { Exchange, PriceBar, Security } from "../src/markets/types.js";
 import type { EmailMessage, Mailer } from "../src/services/mailer.js";
 import { Database } from "../src/storage/database.js";
 import type { User } from "../src/storage/repositories/users.js";
 
-export function memoryDb(): Database {
-	return new Database(":memory:");
+const schemas: { admin: pg.Pool; name: string }[] = [];
+
+/** A connection URL for a brand-new schema on the PostgreSQL server in TEST_DATABASE_URL, or null for SQLite runs. */
+async function freshPostgresUrl(): Promise<string | null> {
+	const url = process.env.TEST_DATABASE_URL;
+	if (!url) return null;
+	const name = `t_${Math.random().toString(36).slice(2, 10)}`;
+	const admin = new pg.Pool({ connectionString: url, max: 1 });
+	await admin.query(`CREATE SCHEMA ${name}`);
+	schemas.push({ admin, name });
+	const target = new URL(url);
+	target.searchParams.set("options", `-c search_path=${name}`);
+	return target.toString();
+}
+
+/**
+ * A fresh, empty database. In-memory SQLite by default; set TEST_DATABASE_URL to run the same tests against a real
+ * PostgreSQL server (each call gets its own throwaway schema, dropped by `dropTestDatabases`).
+ */
+export async function memoryDb(): Promise<Database> {
+	const url = await freshPostgresUrl();
+	if (!url) return Database.memory();
+	const config: DatabaseConfig = { kind: "postgres", url, poolMax: 3 };
+	return Database.open(config);
+}
+
+/** Environment for `parseConfig` that points the app at a fresh database (see `memoryDb`). */
+export async function testEnv(env: Record<string, string> = {}): Promise<Record<string, string>> {
+	const url = await freshPostgresUrl();
+	return { NODE_ENV: "test", ...(url ? { DATABASE_URL: url } : { DATABASE_PATH: ":memory:" }), ...env };
+}
+
+/** Drop the schemas created by `memoryDb` (a no-op for SQLite). Call from an `after` hook. */
+export async function dropTestDatabases(): Promise<void> {
+	for (const { admin, name } of schemas.splice(0)) {
+		await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`).catch(() => undefined);
+		await admin.end().catch(() => undefined);
+	}
 }
 
 /** Deterministic synthetic daily bars for a symbol. */
@@ -45,18 +83,18 @@ export function security(
 	return { exchange, symbol, name, sector, currency: exchange === "NGX" ? "NGN" : "USD" };
 }
 
-export function seed(db: Database, entries: { s: Security; closes: number[] }[]) {
-	db.market.upsertSecurities(entries.map((e) => e.s));
-	for (const e of entries) db.market.upsertPrices(makeBars(e.s.symbol, e.closes, e.s.exchange));
+export async function seed(db: Database, entries: { s: Security; closes: number[] }[]) {
+	await db.market.upsertSecurities(entries.map((e) => e.s));
+	for (const e of entries) await db.market.upsertPrices(makeBars(e.s.symbol, e.closes, e.s.exchange));
 }
 
 /** Insert a user directly (no password hashing), for service-level tests. */
-export function user(
+export async function user(
 	db: Database,
 	overrides: { email?: string; plan?: "free" | "pro"; role?: "admin" | "member" } = {},
-): User {
+): Promise<User> {
 	return db.users.create({
-		email: overrides.email ?? `u${db.users.count() + 1}@example.com`,
+		email: overrides.email ?? `u${(await db.users.count()) + 1}@example.com`,
 		name: "Test User",
 		passwordHash: "x",
 		role: overrides.role,

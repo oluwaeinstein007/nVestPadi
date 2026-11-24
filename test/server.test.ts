@@ -2,26 +2,17 @@ import assert from "node:assert/strict";
 import { type Server, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
-import { createApp } from "../src/app.js";
+import { type App, createApp } from "../src/app.js";
 import { parseConfig } from "../src/config.js";
 import { hmacSha512Hex } from "../src/lib/crypto.js";
 import { createRequestHandler } from "../src/server/server.js";
-import { TestMailer, security, seed } from "./helpers.js";
+import { TestMailer, dropTestDatabases, security, seed, testEnv } from "./helpers.js";
 
 const PAYSTACK_SECRET = "sk_test_secret";
 
 describe("HTTP API (cloud mode)", () => {
 	const mailer = new TestMailer();
-	const app = createApp(
-		parseConfig({
-			DATABASE_PATH: ":memory:",
-			NODE_ENV: "test",
-			APP_MODE: "cloud",
-			PAYSTACK_SECRET_KEY: PAYSTACK_SECRET,
-			PAYSTACK_PLAN_CODE: "PLN_pro",
-		}),
-		{ mailer },
-	);
+	let app: App;
 	let server: Server;
 	let base = "";
 
@@ -54,7 +45,17 @@ describe("HTTP API (cloud mode)", () => {
 	let member = "";
 
 	before(async () => {
-		seed(app.db, [
+		app = await createApp(
+			parseConfig(
+				await testEnv({
+					APP_MODE: "cloud",
+					PAYSTACK_SECRET_KEY: PAYSTACK_SECRET,
+					PAYSTACK_PLAN_CODE: "PLN_pro",
+				}),
+			),
+			{ mailer },
+		);
+		await seed(app.db, [
 			{
 				s: security("GTCO", "Guaranty Trust", "Financial Services"),
 				closes: Array.from({ length: 70 }, (_, i) => 100 + i),
@@ -68,9 +69,10 @@ describe("HTTP API (cloud mode)", () => {
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 	});
-	after(() => {
+	after(async () => {
 		server.close();
-		app.close();
+		await app.close();
+		await dropTestDatabases();
 	});
 
 	it("keeps health public and everything else behind sign-in", async () => {
@@ -251,7 +253,7 @@ describe("HTTP API (cloud mode)", () => {
 			origin: null,
 			headers: { "x-paystack-signature": hmacSha512Hex(PAYSTACK_SECRET, cancel) },
 		});
-		assert.equal(app.db.users.byEmail("bo@example.com")?.plan, "free");
+		assert.equal((await app.db.users.byEmail("bo@example.com"))?.plan, "free");
 	});
 
 	it("signs in and out", async () => {

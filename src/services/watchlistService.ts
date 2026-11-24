@@ -23,31 +23,36 @@ export class WatchlistService {
 		private readonly mode: AppMode,
 	) {}
 
-	list(user: User): WatchlistItem[] {
-		return this.db.watchlist.list(user.id).map((w) => ({
-			...w,
-			quote: this.db.market.latestQuote(w.exchange, w.symbol),
-			spark: this.db.market.history(w.exchange, w.symbol, 30).map((b) => b.close),
-		}));
+	async list(user: User): Promise<WatchlistItem[]> {
+		const entries = await this.db.watchlist.list(user.id);
+		return Promise.all(
+			entries.map(async (w) => {
+				const [quote, bars] = await Promise.all([
+					this.db.market.latestQuote(w.exchange, w.symbol),
+					this.db.market.history(w.exchange, w.symbol, 30),
+				]);
+				return { ...w, quote, spark: bars.map((b) => b.close) };
+			}),
+		);
 	}
 
-	has(user: User, exchange: Exchange, symbol: string): boolean {
+	has(user: User, exchange: Exchange, symbol: string): Promise<boolean> {
 		return this.db.watchlist.has(user.id, exchange, symbol);
 	}
 
 	async add(user: User, symbol: string, exchange?: Exchange): Promise<{ exchange: Exchange; symbol: string }> {
 		const { watchlist } = limitsFor(user, this.mode);
-		if (this.db.watchlist.count(user.id) >= watchlist) {
+		if ((await this.db.watchlist.count(user.id)) >= watchlist) {
 			throw new PlanLimitError(`Your plan allows ${watchlist} watchlist stocks. Remove one or upgrade to Pro.`);
 		}
 		const target = await this.market.track(symbol, exchange);
-		this.db.watchlist.add(user.id, target.exchange, target.symbol);
+		await this.db.watchlist.add(user.id, target.exchange, target.symbol);
 		return target;
 	}
 
-	remove(user: User, symbol: string, exchange?: Exchange): { exchange: Exchange; symbol: string } {
-		const target = this.market.resolve(symbol, exchange);
-		if (!this.db.watchlist.remove(user.id, target.exchange, target.symbol)) {
+	async remove(user: User, symbol: string, exchange?: Exchange): Promise<{ exchange: Exchange; symbol: string }> {
+		const target = await this.market.resolve(symbol, exchange);
+		if (!(await this.db.watchlist.remove(user.id, target.exchange, target.symbol))) {
 			throw new NotFoundError(`${target.symbol} is not on your watchlist`);
 		}
 		return target;

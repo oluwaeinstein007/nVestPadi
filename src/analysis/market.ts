@@ -1,4 +1,4 @@
-import { round } from "../lib/util.js";
+import { mapLimit, round } from "../lib/util.js";
 import type { Exchange, Quote } from "../markets/types.js";
 /**
  * Market-wide views over the latest session: breadth, movers, sector
@@ -32,16 +32,16 @@ export interface MarketOverview {
 }
 
 /** Only quotes from the exchange's most recent session (stale symbols excluded). */
-function currentSession(db: Database, exchange: Exchange): { date: string | null; quotes: Quote[] } {
-	const quotes = db.market.latestQuotes(exchange);
+async function currentSession(db: Database, exchange: Exchange): Promise<{ date: string | null; quotes: Quote[] }> {
+	const quotes = await db.market.latestQuotes(exchange);
 	const date = quotes.reduce<string | null>((max, q) => (max === null || q.date > max ? q.date : max), null);
 	return { date, quotes: quotes.filter((q) => q.date === date) };
 }
 
 const tradedValue = (q: Quote) => q.value ?? (q.volume ?? 0) * q.close;
 
-export function marketOverview(db: Database, exchange: Exchange, top = 5): MarketOverview {
-	const { date, quotes } = currentSession(db, exchange);
+export async function marketOverview(db: Database, exchange: Exchange, top = 5): Promise<MarketOverview> {
+	const { date, quotes } = await currentSession(db, exchange);
 	const withChange = quotes.filter((q) => q.changePct !== null);
 	const byChange = [...withChange].sort((a, b) => (b.changePct as number) - (a.changePct as number));
 
@@ -111,8 +111,8 @@ export interface ScreenRow extends Quote {
 	tradedValue: number;
 }
 
-export function screen(db: Database, options: ScreenOptions): ScreenRow[] {
-	const { quotes } = currentSession(db, options.exchange);
+export async function screen(db: Database, options: ScreenOptions): Promise<ScreenRow[]> {
+	const { quotes } = await currentSession(db, options.exchange);
 	const sector = options.sector?.toLowerCase();
 	const query = options.query?.toLowerCase();
 	const needsRsi = options.rsiBelow !== undefined || options.rsiAbove !== undefined || options.sort === "rsi";
@@ -127,8 +127,8 @@ export function screen(db: Database, options: ScreenOptions): ScreenRow[] {
 		.map((q) => ({ ...q, rsi14: null, tradedValue: round(tradedValue(q), 0) }));
 
 	if (needsRsi) {
-		rows = rows.map((r) => {
-			const closes = db.market.history(r.exchange, r.symbol, 120).map((b) => b.close);
+		rows = await mapLimit(rows, 8, async (r) => {
+			const closes = (await db.market.history(r.exchange, r.symbol, 120)).map((b) => b.close);
 			const value = rsi(closes, 14).at(-1);
 			return { ...r, rsi14: value === undefined || Number.isNaN(value) ? null : round(value, 1) };
 		});
