@@ -273,7 +273,7 @@ function planText(plan, cur) {
 function trackSentence(t) {
 	if (!t || t.trades === 0) return `No completed ${t?.side ?? ""} signals in this history yet.`;
 	const verb = t.side === "BUY" ? "made money" : "were followed by a fall";
-	return `${t.wins} of ${t.trades} past ${t.side} signals ${verb} after costs (avg ${signed(t.avgReturnPct)}, ${signed(t.grossAvgReturnPct)} before costs, over ~${Math.round(t.avgSessions)} sessions; ${[t.avgWinPct == null ? "" : `wins ${signed(t.avgWinPct)}`, t.avgLossPct == null ? "" : `losses ${signed(t.avgLossPct)}`].filter(Boolean).join(", ")}). A random ${t.side === "BUY" ? "entry" : "exit"} worked ${t.baseRate ?? "—"}% of the time.`;
+	return `${t.wins} of ${t.trades} past ${t.side} signals ${verb} after costs (avg ${signed(t.avgReturnPct)}, ${signed(t.grossAvgReturnPct)} before costs, over ~${Math.round(t.avgSessions)} sessions; ${[t.avgWinPct == null ? "" : `wins ${signed(t.avgWinPct)}`, t.avgLossPct == null ? "" : `losses ${signed(t.avgLossPct)}`].filter(Boolean).join(", ")}).${t.baseRate == null ? " Too little history for this one's own random-entry baseline." : ` A random ${t.side === "BUY" ? "entry" : "exit"} worked ${t.baseRate}% of the time.`}`;
 }
 
 function signalSection(r, cur, confidence) {
@@ -307,6 +307,57 @@ function signalSection(r, cur, confidence) {
 		<p class="small muted">${esc(trackSentence(c.track))}</p>
 		${how}
 	</div>`;
+}
+
+/** Position sizer: units such that hitting the stop loses the chosen share of capital, after fees. */
+function sizerSection(r) {
+	const plan = r.call?.side === "BUY" ? r.call.plan : null;
+	const level = (v) =>
+		v == null ? "" : Number(v.toPrecision(v >= 1 ? Math.max(4, String(Math.trunc(v)).length + 2) : 4));
+	const field = (name, label, value, extra = "") =>
+		`<label><span>${label}</span><input name="${name}" type="number" step="any" min="0" inputmode="decimal" value="${value ?? ""}" ${extra} /></label>`;
+	return `<form id="sizer" class="sizer" novalidate>
+		<div class="sizer-fields">
+			${field("capital", `Capital (${esc(r.security.currency)})`, store.get("nvest.sizer.capital", ""), 'required placeholder="e.g. 1000000"')}
+			${field("riskPct", "Risk per trade %", store.get("nvest.sizer.riskPct", "1"), 'max="100"')}
+			${field("stop", "Stop", plan ? level(plan.stop) : "", plan ? "" : 'placeholder="your stop"')}
+			${field("target", "Target", plan ? level(plan.target) : "", 'placeholder="optional"')}
+		</div>
+		<button class="btn" type="submit">Calculate</button>
+		<div id="sizer-out" class="sizer-out" aria-live="polite"></div>
+		<p class="muted small">${plan ? "Stop and target come from the BUY signal; change them to use your own." : "No BUY signal right now, so enter the price where you'd admit you're wrong."} Sized so being stopped out loses your chosen share of capital, fees included. A price can gap through a stop, so losses can be bigger.</p>
+	</form>`;
+}
+
+async function runSizer(form, s) {
+	const out = $("#sizer-out");
+	const v = (name) => form[name].value.trim();
+	if (!(Number(v("capital")) > 0)) {
+		out.innerHTML = '<p class="small down">Enter your capital first.</p>';
+		return;
+	}
+	store.set("nvest.sizer.capital", v("capital"));
+	store.set("nvest.sizer.riskPct", v("riskPct") || "1");
+	const params = new URLSearchParams({ symbol: s.symbol, exchange: s.exchange, capital: v("capital") });
+	for (const name of ["riskPct", "stop", "target"]) if (v(name)) params.set(name, v(name));
+	try {
+		const r = await api(`/api/sizing?${params}`);
+		const z = r.sizing;
+		const cur = r.currency === "NGN" ? "₦" : r.currency === "USD" ? "$" : `${r.currency} `;
+		const money = (n) => `${cur}${fmtPrice(n)}`;
+		const cell = (label, value, note) =>
+			`<div><span>${label}</span><b>${value}</b>${note ? `<small>${note}</small>` : ""}</div>`;
+		out.innerHTML = `<div class="trade-plan">
+				${cell("Buy", z.units > 0 ? `${z.units.toLocaleString()} units` : "nothing", z.units > 0 ? `${money(z.outlay)} · ${z.positionPct}% of capital` : "")}
+				${cell("If stopped", `−${money(z.lossAtStop)}`, `${z.lossAtStopPct}% of capital`)}
+				${cell("At target", z.gainAtTarget == null ? "—" : `+${money(z.gainAtTarget)}`, z.rewardRisk == null ? "" : `reward/risk ${z.rewardRisk}`)}
+				${cell("Turnover", z.shareOfDailyValue == null ? "—" : z.shareOfDailyValue < 0.1 ? "<0.1%" : `${z.shareOfDailyValue}%`, "of a typical day")}
+			</div>
+			${z.warnings.map((w) => `<p class="small warn">⚠ ${esc(w)}</p>`).join("")}
+			<p class="muted small">Fees: buy ${r.costs.buyPct}%, sell ${r.costs.sellPct}%. Limited by ${esc(z.limitedBy.replace("-", " "))}.</p>`;
+	} catch (err) {
+		out.innerHTML = `<p class="small down">${esc(err.message)}</p>`;
+	}
 }
 
 let live = { timer: null, symbol: null };
@@ -376,6 +427,8 @@ function renderSecurity({ report: r, history, watched, confidence }) {
 		<div class="perf">${perf}</div>
 		<h3>Signal</h3>
 		${signalSection(r, cur, confidence)}
+		<h3>How much to buy?</h3>
+		${sizerSection(r)}
 		<h3>Indicators</h3>
 		<div class="indicators">
 			${ind("Trend", esc(r.trend), "From 20/50-day moving averages")}
@@ -491,6 +544,13 @@ function renderSecurity({ report: r, history, watched, confidence }) {
 		live.timer = setTimeout(poll, open ? 30_000 : 5 * 60_000);
 	};
 	poll();
+
+	const sizer = $("#sizer");
+	sizer.addEventListener("submit", (e) => {
+		e.preventDefault();
+		runSizer(sizer, s);
+	});
+	if (sizer.capital.value) runSizer(sizer, s);
 
 	$("#d-hold").addEventListener("click", () => {
 		closeDrawer();

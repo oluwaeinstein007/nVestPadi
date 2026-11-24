@@ -132,6 +132,11 @@ export const SIGNAL_DEFAULTS = { horizon: 20, stopAtr: 2, targetAtr: 3, freshnes
 export const MIN_TRADES = 5;
 /** Sessions before the default strategy can fire (it needs the 200-day average). */
 const WARMUP = 200;
+/**
+ * Fewer random-entry windows than this make a security's own baseline meaningless (33 windows in one uptrend can all
+ * be winners), so it's left out and callers fall back to the market-wide baseline.
+ */
+const MIN_BASE_WINDOWS = 60;
 /** Stops closer than this share of the price get swamped by ordinary daily noise. */
 const MIN_STOP_PCT = 0.02;
 
@@ -462,8 +467,8 @@ function summarize(
 		avgWinPct: avg(wins.map((t) => t.netReturnPct)),
 		avgLossPct: avg(losses.map((t) => t.netReturnPct)),
 		avgSessions: avg(closed.map((t) => t.sessions)),
-		baseRate: windows ? round((favourable / windows) * 100, 1) : null,
-		baseAvgPct: windows ? round(moveSum / windows, 2) : null,
+		baseRate: windows >= MIN_BASE_WINDOWS ? round((favourable / windows) * 100, 1) : null,
+		baseAvgPct: windows >= MIN_BASE_WINDOWS ? round(moveSum / windows, 2) : null,
 		from: bars[start]?.date ?? null,
 		to: bars.at(-1)?.date ?? null,
 	};

@@ -143,6 +143,23 @@ export function marketRoutes(r: Router, app: App) {
 		};
 	});
 
+	// -- Position sizing: how much to buy for the risk the user accepts -----------------
+	r.get("/api/sizing", ({ query }) => {
+		const q = z
+			.object({
+				symbol: z.string().min(1).max(24),
+				exchange: exchangeSchema.optional(),
+				capital: z.coerce.number().positive("Capital must be greater than 0."),
+				riskPct: optionalNumber,
+				maxPositionPct: optionalNumber,
+				entry: optionalNumber,
+				stop: optionalNumber,
+				target: optionalNumber,
+			})
+			.parse(queryObject(query));
+		return app.sizing.size(q);
+	});
+
 	// -- Watchlist ---------------------------------------------------------------------
 	r.get("/api/watchlist", (ctx) => app.watchlists.list(ctx.user));
 	r.post("/api/watchlist", async (ctx) => {

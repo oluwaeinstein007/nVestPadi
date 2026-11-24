@@ -23,6 +23,7 @@ import { MarketService, type SyncResult } from "./services/marketService.js";
 import { Notifier } from "./services/notifier.js";
 import { PortfolioService } from "./services/portfolioService.js";
 import { type LedgerUpdate, SignalLedger } from "./services/signalLedger.js";
+import { SizingService } from "./services/sizingService.js";
 import { WatchlistService } from "./services/watchlistService.js";
 import { Database } from "./storage/database.js";
 import { VectorStore } from "./storage/vectorStore.js";
@@ -47,6 +48,8 @@ export interface App {
 	digests: DigestService;
 	/** The live track record of every signal shown. */
 	ledger: SignalLedger;
+	/** "How much should I buy?" from the stop distance and the risk the user accepts. */
+	sizing: SizingService;
 	bots: BotService;
 	/** Server-wide Telegram bot, when TELEGRAM_BOT_TOKEN is set. */
 	telegram: TelegramClient | null;
@@ -100,6 +103,7 @@ export async function createApp(config: Config, overrides: { mailer?: Mailer } =
 	});
 
 	const ledger = new SignalLedger(db);
+	const sizing = new SizingService(db, market);
 
 	for (const warning of config.warnings) logger.warn(warning);
 
@@ -122,6 +126,7 @@ export async function createApp(config: Config, overrides: { mailer?: Mailer } =
 		portfolio,
 		digests,
 		ledger,
+		sizing,
 		telegram,
 		// Assigned below: the bot needs the finished app.
 		bots: undefined as unknown as BotService,

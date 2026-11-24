@@ -1012,6 +1012,52 @@ table.data .sym span {
 	margin-top: 6px;
 }
 
+/* Position sizer in the security drawer */
+.sizer {
+	display: grid;
+	gap: 8px;
+	margin-bottom: 18px;
+}
+.sizer-fields {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 8px;
+}
+.sizer label {
+	display: grid;
+	gap: 3px;
+	font-size: 11px;
+	color: var(--muted);
+}
+.sizer input {
+	min-width: 0;
+	padding: 7px 10px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 14px;
+}
+.sizer > .btn {
+	justify-self: start;
+}
+.sizer-out:empty {
+	display: none;
+}
+.sizer-out {
+	display: grid;
+	gap: 6px;
+}
+.sizer .warn {
+	color: var(--warn);
+}
+@media (max-width: 560px) {
+	.sizer-fields {
+		grid-template-columns: 1fr 1fr;
+	}
+}
+
 /* Past success rate badge: green when it beats chance with enough history, amber when too thin. */
 .rate {
 	display: inline-flex;

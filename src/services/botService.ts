@@ -62,6 +62,11 @@ export const BOT_COMMANDS: BotCommand[] = [
 		arg: { name: "market", description: "ngx, us or crypto, optionally + sell", required: false },
 	},
 	{
+		name: "size",
+		description: "How much to buy: units for your capital and risk %",
+		arg: { name: "args", description: "symbol capital [risk %], e.g. GTCO 1000000 1", required: true },
+	},
+	{
 		name: "record",
 		description: "Live track record of every signal since launch",
 		arg: { name: "market", description: "ngx, us or crypto", required: false },
@@ -137,6 +142,8 @@ export class BotService {
 				return this.analyze(arg);
 			case "signals":
 				return this.signals(arg, ctx);
+			case "size":
+				return this.size(arg);
 			case "record":
 				return this.record(parseExchange(arg || undefined) ?? ctx.user?.defaultExchange ?? "NGX");
 			case "ask":
@@ -295,6 +302,28 @@ export class BotService {
 			.filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "")
 			.join("\n")
 			.trim();
+	}
+
+	/** "/size GTCO 1000000 1": units to buy so a stop-out costs 1% of ₦1m, using the current BUY signal's stop. */
+	private async size(arg: string): Promise<string> {
+		const [symbol, capitalText, riskText] = arg.split(/\s+/).filter(Boolean);
+		const capital = Number(capitalText?.replace(/[,_₦$]/g, ""));
+		const riskPct = riskText === undefined ? undefined : Number(riskText.replace(/%$/, ""));
+		if (!symbol || !(capital > 0) || (riskPct !== undefined && !(riskPct > 0))) {
+			return "Usage: /size SYMBOL CAPITAL [RISK%], e.g. /size GTCO 1000000 1 (risk 1% of ₦1,000,000 at the signal's stop).";
+		}
+		const r = await this.app.sizing.size({ symbol, capital, riskPct });
+		const z = r.sizing;
+		const amount = (v: number) => money(v, r.currency);
+		return [
+			`**${r.symbol} position size** (${r.riskPct}% risk on ${amount(capital)})`,
+			z.units > 0
+				? `Buy **${r.exchange === "CRYPTO" ? z.units : z.units.toLocaleString("en-US")}** units ≈ ${amount(z.outlay)} with fees (${z.positionPct}% of capital).`
+				: "Nothing: one unit is more than this risk budget allows.",
+			`Stop ${money(r.levels.stop, r.currency)} → lose ${amount(z.lossAtStop)} (${z.lossAtStopPct}%).${z.gainAtTarget !== null ? ` Target ${money(r.levels.target, r.currency)} → gain ${amount(z.gainAtTarget)} (reward/risk ${z.rewardRisk}).` : ""}`,
+			...z.warnings.map((w) => `⚠️ ${w}`),
+			"A price can gap through a stop, so losses can be bigger. Not investment advice.",
+		].join("\n");
 	}
 
 	/** "/record", "/record us": how logged signals have actually played out since launch. */

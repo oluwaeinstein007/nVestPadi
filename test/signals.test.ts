@@ -90,6 +90,19 @@ describe("breakout signals", () => {
 		assert.equal(young.call, null);
 	});
 
+	it("leaves out a baseline measured on too few random windows", () => {
+		// 250 rising sessions: only ~30 windows after the 200-day warm-up, every one a winner.
+		const short = analyzeSignals(
+			makeBars(
+				"WMT",
+				Array.from({ length: 250 }, (_, i) => 100 + i),
+			),
+		);
+		assert.equal(short.track.BUY.baseRate, null);
+		const long = analyzeSignals(makeBars("GTCO", breakoutSeries(Array(30).fill(1.015))));
+		assert.ok(long.track.BUY.baseRate !== null);
+	});
+
 	it("describes a thin record as too few to rely on", () => {
 		const a = analyzeSignals(makeBars("GTCO", breakoutSeries(Array(30).fill(1.015))));
 		assert.match(describeTrack(a.track.BUY), /1 of 1 past BUY signals made money .*Too few signals to rely on/);

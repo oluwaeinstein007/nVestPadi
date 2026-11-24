@@ -86,8 +86,9 @@ Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps th
 | 💼 **Portfolio** | Positions with average cost, live value, today's and total P&L, and weights, per currency (NGN and USD are never mixed) |
 | 🟩 **Heatmap & charts** | Most-traded names sized by value and coloured by move; candlestick or line chart with 1D (5-minute) to 2Y ranges, SMA overlays, volume and past-signal markers |
 | ⚡ **Live prices** | While a market is open, `serve` re-syncs it every `LIVE_SYNC_MINUTES` (default 5), and the stock view polls a near-live price for US stocks and crypto. NGX is delayed (no free intraday feed) |
+| 📏 **Position sizing** | "How much should I buy?": units sized so hitting the stop loses a chosen share of your capital (default 1%), fees included, capped at 25% of capital per position, with warnings when a stock trades too thinly to exit at the stop. Uses the BUY signal's stop and target or your own. In the stock drawer, `nvest size` and `/size` |
 | 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`, `signal-buy`, `signal-sell` (threshold = minimum past success rate); one digest per user per sync; re-arm after firing |
-| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/signals`, `/record`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
+| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/signals`, `/size`, `/record`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
 | 📰 **Daily digests** | Market wrap-ups to a Telegram channel and Discord webhook; personal digests built only from each user's own data |
 | 💬 **Ask AI** | Answers grounded in live reports, market breadth and the research library, with numbered citations |
 | 📄 **Research library** | Annual-report PDFs, HTML, CSV, JSON, Markdown, or whole websites (robots.txt-aware), added by the operator with `nvest ingest` |
@@ -200,6 +201,7 @@ To run the tests against a real Postgres: `TEST_DATABASE_URL=postgres://postgres
 | `analyze <SYM>` | Full technical report |
 | `market` | Breadth, movers, sectors. `--exchange NGX\|US\|CRYPTO` `--top N` |
 | `signals` | Fresh buy/sell signals with stop, target, chance of profit and past record; evidence-backed first. `--exchange` `--side BUY\|SELL` `--all` |
+| `size` | Units to buy so a stop-out loses `--risk` % (default 1) of `--capital`, after fees; `--stop`/`--entry`/`--target` override the signal's levels, `--max-position` caps one position (default 25%) |
 | `record` | Live track record: every logged signal, how it played out after costs, and whether the stated chances came true. `--exchange` `--recent 15` |
 | `screen` | Screener. `--sector` `--search` `--sort` `--min-price` `--max-price` `--rsi-below` `--rsi-above` `--limit` |
 | `watchlist [list\|add\|remove]` | A user's watchlist (`--user email`, default: the owner) |
@@ -257,6 +259,7 @@ curl -H "Authorization: Bearer nvp_…" https://app.yourdomain.com/api/watchlist
 |---|---|---|---|
 | GET | `/api/health` | public | Liveness |
 | GET | `/api/public/snapshot?exchange=NGX` | public | Cached breadth + top movers (landing page) |
+| GET | `/api/sizing?symbol=GTCO&capital=1000000&riskPct=1&stop=` | user | Position size for the current BUY signal or given levels: units, outlay, loss at stop, gain at target, liquidity warnings |
 | GET | `/api/public/track-record?exchange=NGX` | public | Live record of logged signals, calibration of stated chances, recent signals (levels of open ones withheld) |
 | GET | `/api/auth/session` | public | Current user (or null), mode, sign-up status, plans |
 | POST | `/api/auth/signup` · `login` · `logout` | public | `{name, email, password, acceptTerms}` · `{email, password}` |

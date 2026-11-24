@@ -174,6 +174,11 @@ describe("HTTP API (cloud mode)", () => {
 		assert.ok(Array.isArray(signals.ideas));
 		assert.equal(signals.market.BUY.symbols, 2);
 		assert.equal(signals.rules.horizon, 20);
+		const sized = await call("/api/sizing?symbol=GTCO&exchange=NGX&capital=1000000&stop=1", { cookie: owner });
+		assert.equal(sized.status, 200);
+		assert.ok((await json<{ sizing: { units: number } }>(sized)).sizing.units > 0);
+		assert.equal((await call("/api/sizing?symbol=GTCO&capital=0", { cookie: owner })).status, 400);
+		assert.equal((await call("/api/sizing?symbol=GTCO&capital=1000&stop=1")).status, 401);
 		// NGX has no intraday feed: the live endpoint returns the stored board price, without candles.
 		const live = await json<{ price: number; candles: unknown[]; freshness: string }>(
 			await call("/api/securities/NGX/GTCO/live", { cookie: owner }),

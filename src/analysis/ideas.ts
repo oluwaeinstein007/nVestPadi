@@ -24,7 +24,7 @@ export interface SignalIdea {
 	changePct: number | null;
 	date: string;
 	call: SignalCall;
-	/** Win rate minus the base rate, in points (null when there's no track record). */
+	/** Win rate minus the base rate (the market's when the history is short), in points; null without a record. */
 	edge: number | null;
 	/**
 	 * backed: enough past signals and better than a random entry.
@@ -117,7 +117,9 @@ export async function signalSummary(
 
 function toIdea(q: Quote, call: SignalCall, market: MarketTrack, live: WinCount): SignalIdea {
 	const t = call.track;
-	const edge = t.winRate !== null && t.baseRate !== null ? round(t.winRate - t.baseRate, 1) : null;
+	// A short history has no baseline of its own; judge it against the market's.
+	const base = t.baseRate ?? market.baseRate;
+	const edge = t.winRate !== null && base !== null ? round(t.winRate - base, 1) : null;
 	const confidence = confidenceFor(t, market, live);
 	return {
 		exchange: q.exchange,

@@ -1,5 +1,12 @@
 # Upgrading
 
+## v3.3 → v3.4 (position sizing)
+
+No migration.
+
+- **Position sizing:** `/api/sizing`, `nvest size`, the `/size` bot command and a calculator in the stock drawer (capital and risk % are remembered in the browser only).
+- **Short histories no longer get their own random-entry baseline** (fewer than 60 windows after the 200-day warm-up): `track.baseRate` is `null` and ideas and confidence fall back to the market-wide baseline. Previously a stock with ~250 sessions in an uptrend could show a 100% baseline.
+
 ## v3.2 → v3.3 (live track record, success after costs, confidence)
 
 Migrates automatically (SQLite schema 4, PostgreSQL 2: adds the `signal_log` table); nothing is removed.

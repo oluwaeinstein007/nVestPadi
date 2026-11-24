@@ -45,6 +45,7 @@ ${c.bold("Examples:")}
   nvest analyze DANGCEM              ${c.dim("# technical report")}
   nvest signals --side buy           ${c.dim("# buy signals with stop, target and chance of profit")}
   nvest record                       ${c.dim("# live track record of every signal shown")}
+  nvest size GTCO --capital 1000000  ${c.dim("# how many units to buy, risking 1% at the stop")}
   nvest screen --sector bank --sort active
   nvest alerts add GTCO above 100
   nvest ingest file ./reports/zenith-2025-annual.pdf

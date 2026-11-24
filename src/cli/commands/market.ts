@@ -1,4 +1,4 @@
-/** Market data commands: sync, history, quote, analyze, signals, record, market, screen. */
+/** Market data commands: sync, history, quote, analyze, signals, size, record, market, screen. */
 import { signalIdeas, signalSummary } from "../../analysis/ideas.js";
 import { SCREEN_SORTS, type ScreenSort, marketOverview, screen } from "../../analysis/market.js";
 import { parseExchange } from "../../markets/types.js";
@@ -250,6 +250,71 @@ export const marketCommands: Record<string, Command> = {
 			out(
 				c.dim(
 					"\n  Chance = estimated odds of a profit after trading costs (90% range), from this security's past signals,\n  the market's and live results. Live record: nvest record. Not advice.",
+				),
+			);
+		},
+	},
+	size: {
+		usage:
+			"size <SYMBOL> --capital <amount> [--risk 1] [--max-position 25] [--stop <price>] [--entry <price>] [--target <price>]",
+		summary: "How much to buy: units sized so a stop-out loses --risk % of --capital, after fees",
+		options: {
+			...exchangeFlag,
+			capital: { type: "string", short: "c" },
+			risk: { type: "string", short: "r" },
+			"max-position": { type: "string" },
+			stop: { type: "string" },
+			entry: { type: "string" },
+			target: { type: "string" },
+		},
+		async run(app, args, flags, json) {
+			const symbol = args[0];
+			const capital = num(flags.capital, "capital");
+			if (!symbol || capital === undefined) throw new UsageError("Usage: nvest size GTCO --capital 1000000 [--risk 1]");
+			const r = await app.sizing.size({
+				symbol,
+				exchange: parseExchange(str(flags.exchange)),
+				capital,
+				riskPct: num(flags.risk, "risk"),
+				maxPositionPct: num(flags["max-position"], "max-position"),
+				stop: num(flags.stop, "stop"),
+				entry: num(flags.entry, "entry"),
+				target: num(flags.target, "target"),
+			});
+			if (json) return r;
+			const z = r.sizing;
+			const units = r.exchange === "CRYPTO" ? String(z.units) : z.units.toLocaleString("en-US");
+			out(heading(`${r.exchange}:${r.symbol} position size`, r.name));
+			out(
+				kv([
+					[
+						"Levels",
+						`entry ${price(r.levels.entry)} · stop ${price(r.levels.stop)}${r.levels.target ? ` · target ${price(r.levels.target)}` : ""} ${c.dim(`(${r.levels.source === "signal" ? "from the BUY signal" : "your levels"})`)}`,
+					],
+					["Buy", `${c.bold(units)} units ≈ ${r.currency} ${price(z.outlay)} with fees (${z.positionPct}% of capital)`],
+					[
+						"If stopped",
+						`−${r.currency} ${price(z.lossAtStop)} (${z.lossAtStopPct}% of capital, risk budget ${r.riskPct}%)`,
+					],
+					[
+						"At target",
+						z.gainAtTarget === null
+							? "—"
+							: `+${r.currency} ${price(z.gainAtTarget)} (${z.gainAtTargetPct}%) · reward/risk ${z.rewardRisk}`,
+					],
+					["Limited by", z.limitedBy],
+					[
+						"Turnover",
+						z.shareOfDailyValue === null
+							? "unknown"
+							: `${z.shareOfDailyValue < 0.1 ? "<0.1" : z.shareOfDailyValue}% of an average day's trading`,
+					],
+				]),
+			);
+			for (const w of z.warnings) out(`  ${c.yellow("!")} ${w}`);
+			out(
+				c.dim(
+					`\n  Fees: buy ${r.costs.buyPct}%, sell ${r.costs.sellPct}%. A price can gap through a stop, so losses can exceed the budget. Not advice.`,
 				),
 			);
 		},
