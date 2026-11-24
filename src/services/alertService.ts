@@ -3,6 +3,7 @@
  * each owner's channels. Alerts are one-shot: once triggered they stay in the
  * list (with the trigger value) until deleted or re-armed.
  */
+import { MIN_TRADES, analyzeSignals } from "../analysis/signals.js";
 import { rsi, sma } from "../analysis/technicalAnalysis.js";
 import type { AppMode } from "../config.js";
 import { NotFoundError, PlanLimitError, ValidationError } from "../lib/errors.js";
@@ -22,6 +23,8 @@ export const ALERT_CONDITIONS = {
 	"rsi-above": "RSI(14) rises above",
 	"rsi-below": "RSI(14) falls below",
 	"volume-spike": "volume is at least N× its 20-day average, N =",
+	"signal-buy": "a BUY signal fires whose past success rate (%) is at least",
+	"signal-sell": "a SELL signal fires whose past success rate (%) is at least",
 } as const;
 export type AlertCondition = keyof typeof ALERT_CONDITIONS;
 
@@ -49,6 +52,8 @@ export class AlertService {
 		if (!Number.isFinite(input.threshold)) throw new ValidationError("Alert threshold must be a number");
 		if (input.condition === "volume-spike" && input.threshold <= 1)
 			throw new ValidationError("volume-spike multiplier must be > 1 (e.g. 3)");
+		if (input.condition.startsWith("signal-") && (input.threshold < 0 || input.threshold > 100))
+			throw new ValidationError("Signal alerts take a minimum success rate from 0 to 100 (0 = any signal).");
 		this.assertCapacity(user);
 		return this.db.alerts.create({ ...input, userId: user.id });
 	}
@@ -115,6 +120,19 @@ export class AlertService {
 
 	private describe(alert: AlertRow, value: number): string {
 		const quote = this.db.market.latestQuote(alert.exchange, alert.symbol);
+		if (alert.condition === "signal-buy" || alert.condition === "signal-sell") {
+			const call = analyzeSignals(this.db.market.history(alert.exchange, alert.symbol, 730)).call;
+			const p = call?.plan;
+			const levels = p
+				? p.side === "BUY"
+					? ` Plan: entry ~${p.entry}, stop ${p.stop}, target ${p.target}.`
+					: ` Wrong above ${p.stop}; downside objective ${p.target}.`
+				: "";
+			const record = call?.track.trades
+				? ` Past ${call.side} signals: ${call.track.wins}/${call.track.trades} worked (${value}%).`
+				: "";
+			return `📈 ${alert.exchange}:${alert.symbol} — ${call?.strength ?? ""} ${call?.side ?? alert.condition.slice(7).toUpperCase()} signal${quote ? ` at ${quote.currency} ${quote.close} (${quote.date})` : ""}.${call ? ` ${call.reason}.` : ""}${levels}${record}${alert.note ? `\n${alert.note}` : ""}`;
+		}
 		const label = ALERT_CONDITIONS[alert.condition as AlertCondition] ?? alert.condition;
 		return `🔔 ${alert.exchange}:${alert.symbol} — ${label} ${alert.threshold} (now ${value}${quote ? `, close ${quote.currency} ${quote.close} on ${quote.date}` : ""})${alert.note ? `\n${alert.note}` : ""}`;
 	}
@@ -154,6 +172,15 @@ export class AlertService {
 				if (avg <= 0) return null;
 				const ratio = quote.volume / avg;
 				return ratio >= t ? round(ratio, 1) : null;
+			}
+			case "signal-buy":
+			case "signal-sell": {
+				const call = analyzeSignals(this.db.market.history(alert.exchange, alert.symbol, 730)).call;
+				if (!call || call.side !== (alert.condition === "signal-buy" ? "BUY" : "SELL")) return null;
+				const rate = call.track.winRate ?? 0;
+				// A minimum success rate only means something with enough past signals behind it.
+				if (t > 0 && (call.track.trades < MIN_TRADES || rate < t)) return null;
+				return rate;
 			}
 			default:
 				return null;

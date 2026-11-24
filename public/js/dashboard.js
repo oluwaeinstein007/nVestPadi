@@ -21,6 +21,8 @@ import {
 const state = {
 	exchange: store.get("nvest.exchange", null),
 	movers: "gainers",
+	signalSide: "BUY",
+	signalsAll: false,
 	market: null,
 	status: null,
 	account: null,
@@ -44,8 +46,10 @@ async function loadMarket() {
 	state.market = m;
 	$("#session").textContent = m.date ? (isCrypto() ? `24h · ${m.date}` : `Session ${m.date}`) : "";
 	$("#session").title = isCrypto()
-		? "Rolling 24-hour change, updated with every sync"
-		: "End-of-day data for the latest trading session";
+		? "Rolling 24-hour change, refreshed every few minutes"
+		: state.exchange === "NGX"
+			? "Latest NGX session; refreshed every few minutes during trading hours (delayed)"
+			: "Latest US session; refreshed every few minutes during trading hours";
 
 	const total = m.count || 1;
 	const [up, flat, down] = $$("#breadth-bar span");
@@ -197,6 +201,7 @@ async function openSecurity(exchange, symbol) {
 }
 
 function closeDrawer() {
+	stopLive();
 	$("#drawer").hidden = true;
 	history.replaceState(null, "", location.pathname + location.search);
 	document.body.style.overflow = "";
@@ -215,6 +220,90 @@ const EXPLAIN = {
 	atr: () => "Average daily price range (14 sessions)",
 };
 
+const signed = (v, digits = 1) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(digits)}%`);
+
+/** "64% · 14 of 22" with a warning tone when there are too few past signals to trust. */
+function successBadge(track, minTrades) {
+	if (!track || track.trades === 0)
+		return '<span class="rate none" title="No completed past signals yet">no record</span>';
+	const thin = track.trades < minTrades;
+	const beats = track.baseRate != null && track.winRate > track.baseRate;
+	const cls = thin ? "thin" : beats ? "good" : "weak";
+	const title = `${track.wins} of ${track.trades} past ${track.side} signals ${track.side === "BUY" ? "made money" : "saw the price fall"}${track.baseRate == null ? "" : `; a random ${track.side === "BUY" ? "entry" : "exit"} worked ${track.baseRate}% of the time`}${thin ? ". Too few signals to rely on." : ""}`;
+	return `<span class="rate ${cls}" title="${esc(title)}">${track.winRate}% <small>of ${track.trades}</small></span>`;
+}
+
+function planText(plan, cur) {
+	if (!plan) return '<p class="muted small">Not enough range history to size a stop and target yet.</p>';
+	const row = (label, value, note) =>
+		`<div><span>${label}</span><b>${value}</b>${note ? `<small>${note}</small>` : ""}</div>`;
+	return plan.side === "BUY"
+		? `<div class="trade-plan">
+				${row("Buy near", `${cur}${fmtPrice(plan.entry)}`, "latest price")}
+				${row("Stop loss", `${cur}${fmtPrice(plan.stop)}`, `−${plan.riskPct}%`)}
+				${row("Target", `${cur}${fmtPrice(plan.target)}`, `+${plan.rewardPct}%`)}
+				${row("Time frame", `~${plan.horizon} sessions`, "then reassess")}
+			</div>`
+		: `<div class="trade-plan">
+				${row("Sell / trim near", `${cur}${fmtPrice(plan.entry)}`, "if you hold it")}
+				${row("Wrong above", `${cur}${fmtPrice(plan.stop)}`, `+${plan.riskPct}%`)}
+				${row("Downside to", `${cur}${fmtPrice(plan.target)}`, `−${plan.rewardPct}%`)}
+				${row("Time frame", `~${plan.horizon} sessions`, "then reassess")}
+			</div>`;
+}
+
+function trackSentence(t) {
+	if (!t || t.trades === 0) return `No completed ${t?.side ?? ""} signals in this history yet.`;
+	const verb = t.side === "BUY" ? "made money" : "were followed by a fall";
+	return `${t.wins} of ${t.trades} past ${t.side} signals ${verb} (avg ${signed(t.avgReturnPct)} over ~${Math.round(t.avgSessions)} sessions; ${[t.avgWinPct == null ? "" : `wins ${signed(t.avgWinPct)}`, t.avgLossPct == null ? "" : `losses ${signed(t.avgLossPct)}`].filter(Boolean).join(", ")}). A random ${t.side === "BUY" ? "entry" : "exit"} worked ${t.baseRate ?? "—"}% of the time.`;
+}
+
+function signalSection(r, cur) {
+	const rules = r.rules;
+	const how = `<details class="how"><summary>How signals and success rates work</summary>
+		<p>A BUY fires when the price closes at a new 50-session high while above its 200-day average (a breakout in an uptrend); a SELL when it closes at a new 50-session low below that average. It's strong when volume is 1.5× its 20-day average. Signals from the last 3 sessions are shown.</p>
+		<p>We tested several rule sets on about 10 years of prices. This one beat a random entry on NGX stocks in both older and recent years; on US stocks, crypto and for SELL signals no rule set showed a reliable edge, so judge each one by its own record below.</p>
+		<p>The success rate replays every past signal of the same kind on this ${r.security.exchange === "CRYPTO" ? "coin" : "stock"} with the same rules: buy at the next session's open, exit at the stop (${rules.stopAtr}× ATR), the target (${rules.targetAtr}× ATR), an opposite signal, or after ${rules.horizon} sessions. It's before brokerage fees, and past results don't guarantee future ones. Fewer than ${rules.minTrades} past signals is too few to rely on.</p>
+	</details>`;
+	if (!r.call) {
+		return `<div class="call none">
+			<p><b>No buy or sell signal right now.</b> <span class="muted small">Hold / wait for a setup.</span></p>
+			<p class="small muted">Track record on this ${r.security.exchange === "CRYPTO" ? "coin" : "stock"}: BUY ${successBadge(r.track.BUY, rules.minTrades)} · SELL ${successBadge(r.track.SELL, rules.minTrades)}</p>
+			${how}
+		</div>`;
+	}
+	const c = r.call;
+	return `<div class="call ${c.side}">
+		<div class="call-head">
+			<span class="signal ${c.side}">${c.strength.toUpperCase()} ${c.side}</span>
+			<span class="muted small">signal on ${esc(c.date)}</span>
+			<span class="grow"></span>
+			<span class="muted small">Success rate</span> ${successBadge(c.track, rules.minTrades)}
+		</div>
+		<p class="small">${esc(c.reason)}</p>
+		${planText(c.plan, cur)}
+		<p class="small muted">${esc(trackSentence(c.track))}</p>
+		${how}
+	</div>`;
+}
+
+let live = { timer: null, symbol: null };
+
+function stopLive() {
+	clearTimeout(live.timer);
+	live = { timer: null, symbol: null };
+}
+
+function liveLabel(q) {
+	const time = q.asOf
+		? new Date(q.asOf).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+		: "";
+	if (q.freshness === "live")
+		return { cls: "live", text: `● Live${time ? ` · ${time}` : ""}`, title: `${q.source} · ${q.session}` };
+	if (q.freshness === "delayed") return { cls: "delayed", text: "Delayed", title: `${q.source} · ${q.session}` };
+	return { cls: "closed", text: "Market closed", title: `Showing the last close · ${q.session}` };
+}
+
 function renderSecurity({ report: r, history, watched }) {
 	const s = r.security;
 	const i = r.indicators;
@@ -227,6 +316,10 @@ function renderSecurity({ report: r, history, watched }) {
 		.join("");
 	const ind = (label, value, note, extra = "") =>
 		`<div class="ind"><span>${label}</span><b>${value}</b>${note ? `<small>${note}</small>` : ""}${extra}</div>`;
+	const ranges = s.exchange === "NGX" ? Object.keys(RANGES) : ["1D", ...Object.keys(RANGES)];
+	let mode = store.get("nvest.chartMode", "candles");
+	let range = "6M";
+	let intraday = [];
 
 	const meta = [s.exchange === "US" ? s.venue : s.exchange, s.symbol, s.sector, s.industry].filter(Boolean);
 	$("#drawer-body").innerHTML = `
@@ -236,9 +329,10 @@ function renderSecurity({ report: r, history, watched }) {
 			${s.marketCap ? `<p class="muted small">Market cap ${cur}${fmtCompact(s.marketCap)}</p>` : ""}
 		</div>
 		<div class="d-price">
-			<span class="big">${cur}${fmtPrice(r.latest.close)}</span>${chg(r.latest.changePct)}
-			<span class="muted small">${esc(r.latest.date)}</span>
-			${r.signal ? `<span class="signal ${r.signal.signal}" title="${esc(r.signal.reason)}">${r.signal.strength.toUpperCase()} ${r.signal.signal}</span>` : ""}
+			<span class="big" id="d-last">${cur}${fmtPrice(r.latest.close)}</span><span id="d-chg">${chg(r.latest.changePct)}</span>
+			<span class="muted small" id="d-asof">${esc(r.latest.date)}</span>
+			<span class="live-pill" id="d-live" hidden></span>
+			${r.call ? `<span class="signal ${r.call.side}" title="${esc(r.call.reason)}">${r.call.strength.toUpperCase()} ${r.call.side}</span>` : ""}
 		</div>
 		<div class="d-actions">
 			<button class="btn" type="button" id="d-watch">${watched ? "★ Watching" : "☆ Add to watchlist"}</button>
@@ -246,12 +340,20 @@ function renderSecurity({ report: r, history, watched }) {
 			<button class="btn" type="button" id="d-hold">+ Portfolio</button>
 			<button class="btn" type="button" id="d-ask">Ask AI about ${esc(s.symbol)}</button>
 		</div>
-		<div class="tabs ranges" role="tablist" aria-label="Chart range">${Object.keys(RANGES)
-			.map((k) => `<button role="tab" type="button" data-range="${k}" aria-selected="${k === "1Y"}">${k}</button>`)
-			.join("")}</div>
+		<div class="chart-bar">
+			<div class="tabs ranges" role="tablist" aria-label="Chart range">${ranges
+				.map((k) => `<button role="tab" type="button" data-range="${k}" aria-selected="${k === range}">${k}</button>`)
+				.join("")}</div>
+			<div class="tabs" role="tablist" aria-label="Chart type">
+				<button role="tab" type="button" data-mode="candles" aria-selected="${mode === "candles"}">Candles</button>
+				<button role="tab" type="button" data-mode="line" aria-selected="${mode === "line"}">Line</button>
+			</div>
+		</div>
 		<div class="chart-wrap" id="chart"></div>
-		<div class="legend"><span><i style="background:var(--${(history.at(-1)?.close ?? 0) >= (history[0]?.close ?? 0) ? "up" : "down"})"></i>Close</span><span><i style="background:var(--chart-1)"></i>SMA 20</span><span><i style="background:var(--chart-2)"></i>SMA 50</span></div>
+		<div class="legend" id="legend"></div>
 		<div class="perf">${perf}</div>
+		<h3>Signal</h3>
+		${signalSection(r, cur)}
 		<h3>Indicators</h3>
 		<div class="indicators">
 			${ind("Trend", esc(r.trend), "From 20/50-day moving averages")}
@@ -265,16 +367,108 @@ function renderSecurity({ report: r, history, watched }) {
 		</div>
 		<h3>Summary</h3>
 		<ul class="highlights">${r.highlights.map((h) => `<li>${esc(h)}</li>`).join("")}</ul>
-		<p class="muted small" style="margin-top:16px">Educational analysis based on ${r.bars} sessions. Not investment advice.</p>`;
+		<p class="muted small" style="margin-top:16px">Educational analysis based on ${r.bars} sessions. Signals and success rates describe the past, not the future. Not investment advice.</p>`;
 
-	const drawRange = (key) => {
-		for (const b of $$("[data-range]")) b.setAttribute("aria-selected", String(b.dataset.range === key));
-		// Crypto trades daily: scale session counts to calendar days.
-		const bars = s.exchange === "CRYPTO" ? Math.round((RANGES[key] * 365) / 252) : RANGES[key];
-		renderChart($("#chart"), history.slice(-bars));
+	const draw = () => {
+		for (const b of $$("[data-range]")) b.setAttribute("aria-selected", String(b.dataset.range === range));
+		for (const b of $$("[data-mode]")) b.setAttribute("aria-selected", String(b.dataset.mode === mode));
+		let weekly = false;
+		if (range === "1D") {
+			const bars = intraday.map((c) => ({
+				...c,
+				date: c.time,
+				label: new Date(c.time).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+				changePct: null,
+			}));
+			renderChart($("#chart"), bars, { mode, intraday: true });
+		} else {
+			// Crypto trades daily: scale session counts to calendar days.
+			const window = s.exchange === "CRYPTO" ? Math.round((RANGES[range] * 365) / 252) : RANGES[range];
+			weekly = renderChart($("#chart"), history, { window, mode, markers: r.trades })?.weekly ?? false;
+		}
+		const closeOnly = mode === "candles" && range !== "1D" && history.slice(-RANGES[range]).some((b) => b.high == null);
+		$("#legend").innerHTML = [
+			mode === "candles"
+				? `<span><i style="background:var(--up)"></i>${weekly ? "Weekly" : range === "1D" ? "5-min" : "Daily"} candles</span>`
+				: `<span><i style="background:var(--${(history.at(-1)?.close ?? 0) >= (history[0]?.close ?? 0) ? "up" : "down"})"></i>Close</span>`,
+			range === "1D"
+				? ""
+				: '<span><i style="background:var(--chart-1)"></i>SMA 20</span><span><i style="background:var(--chart-2)"></i>SMA 50</span>',
+			range === "1D"
+				? ""
+				: '<span class="up">▲</span><span>past BUY</span><span class="down">▼</span><span>past SELL</span>',
+			closeOnly
+				? '<span class="muted" title="The price source only has closing prices for older sessions: those candles open at the previous close and have no wicks">no wicks = close-only history</span>'
+				: "",
+		].join("");
 	};
-	for (const b of $$("[data-range]")) b.addEventListener("click", () => drawRange(b.dataset.range));
-	drawRange("1Y");
+	for (const b of $$("[data-range]"))
+		b.addEventListener("click", () => {
+			range = b.dataset.range;
+			draw();
+		});
+	for (const b of $$("[data-mode]"))
+		b.addEventListener("click", () => {
+			mode = b.dataset.mode;
+			store.set("nvest.chartMode", mode);
+			draw();
+		});
+	draw();
+
+	// Live price: poll while the drawer is open and the market is trading.
+	stopLive();
+	live.symbol = `${s.exchange}:${s.symbol}`;
+	const key = live.symbol;
+	const poll = async () => {
+		if (live.symbol !== key) return;
+		let q = null;
+		if (document.visibilityState === "visible") {
+			try {
+				q = await api(`/api/securities/${s.exchange}/${encodeURIComponent(s.symbol)}/live`);
+			} catch {
+				/* keep showing the last price */
+			}
+		}
+		if (live.symbol !== key) return;
+		if (q) {
+			const label = liveLabel(q);
+			const pill = $("#d-live");
+			pill.hidden = false;
+			pill.className = `live-pill ${label.cls}`;
+			pill.textContent = label.text;
+			pill.title = label.title;
+			$("#d-last").textContent = `${cur}${fmtPrice(q.price)}`;
+			$("#d-chg").innerHTML = chg(q.changePct);
+			if (q.asOf) $("#d-asof").textContent = fmtDate(q.asOf);
+			intraday = q.candles ?? [];
+			// Fold the live price into today's daily candle.
+			const day = q.asOf?.slice(0, 10);
+			const last = history.at(-1);
+			if (q.freshness === "live" && day && last) {
+				if (day === last.date) {
+					last.close = q.price;
+					if (q.dayHigh != null) last.high = Math.max(last.high ?? q.dayHigh, q.dayHigh);
+					if (q.dayLow != null) last.low = Math.min(last.low ?? q.dayLow, q.dayLow);
+					last.changePct = q.changePct;
+				} else if (day > last.date) {
+					history.push({
+						...last,
+						date: day,
+						open: intraday[0]?.open ?? last.close,
+						high: q.dayHigh ?? q.price,
+						low: q.dayLow ?? q.price,
+						close: q.price,
+						volume: q.volume,
+						changePct: q.changePct,
+					});
+				}
+			}
+			draw();
+		}
+		const open = q ? q.marketOpen : true;
+		live.timer = setTimeout(poll, open ? 30_000 : 5 * 60_000);
+	};
+	poll();
 
 	$("#d-hold").addEventListener("click", () => {
 		closeDrawer();
@@ -302,15 +496,80 @@ function renderSecurity({ report: r, history, watched }) {
 		const form = $("#alert-form");
 		form.symbol.value = s.symbol;
 		form.dataset.exchange = s.exchange;
-		form.condition.value = "below";
-		form.threshold.value = (r.latest.close * 0.95).toFixed(2);
+		form.condition.value = "signal-buy";
+		form.condition.dispatchEvent(new Event("change"));
 		form.threshold.focus();
 		form.scrollIntoView({ behavior: "smooth", block: "center" });
 	});
 	$("#d-ask").addEventListener("click", () => {
 		closeDrawer();
-		ask(`Give me a quick read on ${s.name} (${s.symbol}): trend, momentum and key levels.`);
+		ask(`Give me a quick read on ${s.name} (${s.symbol}): trend, momentum, the current signal and key levels.`);
 	});
+}
+
+// ---------------------------------------------------------------------------
+// Signals
+// ---------------------------------------------------------------------------
+
+async function loadSignals() {
+	const box = $("#signals");
+	const side = state.signalSide;
+	const { ideas, rules, market } = await api(`/api/signals?exchange=${state.exchange}&side=${side}&limit=50`);
+	const cur = currency();
+	// Evidence-backed ideas lead; the rest (too few past signals, or no better than chance) sit behind a toggle.
+	const backed = ideas.filter((i) => i.evidence === "backed");
+	const others = ideas.filter((i) => i.evidence !== "backed");
+	const shown = state.signalsAll ? [...backed, ...others] : backed;
+	const row = (i) => {
+		const p = i.call.plan;
+		const levels = p
+			? side === "BUY"
+				? `stop ${cur}${fmtPrice(p.stop)} · target ${cur}${fmtPrice(p.target)}`
+				: `wrong above ${cur}${fmtPrice(p.stop)} · down to ${cur}${fmtPrice(p.target)}`
+			: "";
+		return `<li><button type="button" data-open="${esc(i.exchange)}:${esc(i.symbol)}" title="${esc(i.call.reason)}">
+			<span class="sym"><span><b>${esc(i.symbol)}</b><span class="signal ${side} small">${i.call.strength}</span></span><span class="name">${esc(i.name)}</span></span>
+			<span class="lv"><span>${cur}${fmtPrice(i.close)} ${chg(i.changePct)}</span><span class="muted small">${levels}</span></span>
+			${successBadge(i.call.track, rules.minTrades)}
+		</button></li>`;
+	};
+	const word = side === "BUY" ? "buy" : "sell";
+	let html = shown
+		.slice(0, state.signalsAll ? 50 : 12)
+		.map(row)
+		.join("");
+	if (!html) {
+		html = !state.market?.count
+			? `<li>${emptyMarket()}</li>`
+			: ideas.length
+				? `<li class="empty">No fresh ${word} signal here has a track record that beats chance right now.</li>`
+				: `<li class="empty">No fresh ${word} signals in this market right now.</li>`;
+	}
+	if (others.length) {
+		html += `<li><button type="button" class="link more" id="signals-more">${state.signalsAll ? "Hide" : "Show"} ${others.length} more ${word} signal${others.length === 1 ? "" : "s"} with a thin or poor track record</button></li>`;
+	}
+	box.innerHTML = html;
+	$("#signals-more")?.addEventListener("click", () => {
+		state.signalsAll = !state.signalsAll;
+		loadSignals().catch(toastError);
+	});
+	const note = ideas.length
+		? `Badge = share of past ${side} signals on that ${isCrypto() ? "coin" : "stock"} that ${side === "BUY" ? "made money" : "were followed by a fall"} (within ${rules.horizon} sessions, before fees). Past results, not a forecast.`
+		: "";
+	$("#signals-note").innerHTML = [marketRecord(market[side]), note].filter(Boolean).join(" ");
+}
+
+/** One honest line on how these rules have done across the whole market vs a random entry. */
+function marketRecord(m) {
+	if (!m || !m.trades) return "";
+	const what = m.side === "BUY" ? "made money" : "were followed by a fall";
+	const verdict =
+		m.baseRate == null
+			? ""
+			: m.winRate > m.baseRate + 3
+				? `<b class="up">better than a random entry (${m.baseRate}%)</b>.`
+				: `<b class="down">no better than a random entry (${m.baseRate}%)</b>, so treat these as ideas to research, not recommendations.`;
+	return `Across ${m.symbols} ${isCrypto() ? "coins" : "stocks"} here, ${m.trades} past ${m.side} signals ${what} ${m.winRate}% of the time: ${verdict}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +624,16 @@ async function loadAlerts() {
 // Portfolio
 // ---------------------------------------------------------------------------
 
+/** SELL on a holding = consider selling or trimming; BUY = the signal supports adding. */
+function holdingSignal(p) {
+	const g = p.signal;
+	if (!g) return "";
+	const rate = g.trades ? ` Past ${g.side} signals on it worked ${g.winRate}% of the time (${g.trades}).` : "";
+	const what = g.side === "SELL" ? "Consider selling or trimming" : "Signal supports adding";
+	const stop = g.side === "BUY" && g.stop != null ? ` Stop ${fmtPrice(g.stop)}.` : "";
+	return ` <span class="signal ${g.side} small" title="${esc(`${what} (${g.strength}, ${g.date}): ${g.reason}.${stop}${rate}`)}">${g.side}</span>`;
+}
+
 async function loadPortfolio() {
 	const { positions, totals } = await api("/api/portfolio");
 	$("#holding-count").textContent = quotaLabel(positions.length, state.account?.limits.holdings);
@@ -382,7 +651,7 @@ async function loadPortfolio() {
 		? positions
 				.map(
 					(p) => `<li data-open="${esc(p.exchange)}:${esc(p.symbol)}" tabindex="0">
-						<div class="meta"><b>${esc(p.symbol)}</b><span>${p.quantity} × ${curOf(p.currency)}${fmtPrice(p.avgCost)}</span></div>
+						<div class="meta"><b>${esc(p.symbol)}${holdingSignal(p)}</b><span>${p.quantity} × ${curOf(p.currency)}${fmtPrice(p.avgCost)}</span></div>
 						<div class="right"><div>${curOf(p.currency)}${fmtPrice(p.value ?? p.cost)}</div>${chg(p.pnlPct)}</div>
 						<button class="link" type="button" data-remove-holding="${p.id}" aria-label="Remove ${esc(p.symbol)} from portfolio">✕</button>
 					</li>`,
@@ -396,9 +665,9 @@ async function loadPortfolio() {
 // ---------------------------------------------------------------------------
 
 const SUGGESTIONS = {
-	NGX: ["How did banks do today?", "Which sectors are leading?", "Biggest losers this session"],
-	US: ["How is big tech trading?", "Which stocks are oversold?", "Top movers today"],
-	CRYPTO: ["How is Bitcoin trending?", "Which coins rallied today?", "Is Ethereum overbought?"],
+	NGX: ["Which stocks have buy signals?", "How did banks do today?", "Which sectors are leading?"],
+	US: ["Which stocks have buy signals?", "How is big tech trading?", "Which stocks are oversold?"],
+	CRYPTO: ["Which coins have buy signals?", "How is Bitcoin trending?", "Is Ethereum overbought?"],
 };
 
 function renderSuggestions() {
@@ -534,7 +803,7 @@ async function refreshAccount() {
 
 async function refreshAll() {
 	const results = await Promise.allSettled([loadMarket(), loadWatchlist(), loadAlerts(), loadPortfolio()]);
-	await loadScreen().catch(() => undefined);
+	await Promise.allSettled([loadScreen(), loadSignals()]);
 	const failed = results.find((r) => r.status === "rejected");
 	if (failed && failed.reason.status !== 401) toastError(failed.reason);
 }
@@ -693,7 +962,7 @@ function wireEvents() {
 			});
 			f.reset();
 			delete f.dataset.exchange;
-			toast("Alert created — it's checked after every market sync.");
+			toast("Alert created — it's checked after every market sync (every few minutes while the market is open).");
 			loadAlerts();
 		} catch (err) {
 			toastError(err);
@@ -715,6 +984,30 @@ function wireEvents() {
 	});
 
 	$("#sync").addEventListener("click", (e) => syncNow(e.currentTarget));
+
+	for (const b of $$("[data-side]")) {
+		b.addEventListener("click", () => {
+			state.signalSide = b.dataset.side;
+			selectTab("[data-side]", (x) => x === b);
+			loadSignals().catch(toastError);
+		});
+	}
+
+	// Signal alerts take a minimum past success rate instead of a price.
+	const alertForm = $("#alert-form");
+	alertForm.condition.addEventListener("change", () => {
+		const signal = alertForm.condition.value.startsWith("signal-");
+		alertForm.threshold.placeholder = signal ? "Min success % (0 = any)" : "Value";
+		alertForm.threshold.min = signal ? "0" : "";
+		alertForm.threshold.max = signal ? "100" : "";
+		if (signal && alertForm.threshold.value === "") alertForm.threshold.value = "0";
+	});
+
+	// Keep prices current while the tab is visible (the server re-syncs every few minutes in trading hours).
+	setInterval(() => {
+		if (document.visibilityState !== "visible" || !state.account) return;
+		Promise.allSettled([loadMarket(), loadWatchlist(), loadPortfolio(), loadSignals()]);
+	}, 120_000);
 }
 
 async function init() {

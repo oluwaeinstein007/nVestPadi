@@ -82,6 +82,18 @@ export class MarketRepository {
 		).map((r) => r.symbol);
 	}
 
+	/** Symbols whose stored history is mostly close-only (no intraday range). */
+	closeOnlyHistory(exchange: Exchange, minBars: number): string[] {
+		return (
+			this.db
+				.prepare(
+					`SELECT symbol FROM daily_prices WHERE exchange = ?
+					 GROUP BY symbol HAVING COUNT(*) >= ? AND SUM(high IS NOT NULL) * 2 < COUNT(*) ORDER BY symbol`,
+				)
+				.all(exchange, minBars) as { symbol: string }[]
+		).map((r) => r.symbol);
+	}
+
 	upsertPrices(bars: PriceBar[]) {
 		const stmt = this.db.prepare(`
 			INSERT INTO daily_prices

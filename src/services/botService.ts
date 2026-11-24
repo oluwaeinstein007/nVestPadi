@@ -227,9 +227,12 @@ export class BotService {
 		const r = await this.app.market.report(symbol, exchange);
 		return [
 			`**${r.security.name}** (${r.security.exchange}:${r.security.symbol}) — ${money(r.latest.close, r.security.currency)} ${pct(r.latest.changePct)}`,
-			r.signal ? `Signal: **${r.signal.strength} ${r.signal.signal}** — ${r.signal.reason}` : "",
+			r.call
+				? `Signal: **${r.call.strength} ${r.call.side}**${r.call.track.trades ? ` · past success ${r.call.track.winRate}% of ${r.call.track.trades}` : ""}`
+				: "Signal: none right now (hold / wait)",
+			// The highlights already spell out the signal, its plan and its track record.
 			...r.highlights.map((h) => `• ${h}`),
-			"Educational analysis, not investment advice.",
+			"Educational analysis; success rates are past results, not predictions. Not investment advice.",
 		]
 			.filter(Boolean)
 			.join("\n");

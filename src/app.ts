@@ -16,6 +16,7 @@ import { BotService } from "./services/botService.js";
 import { DigestService } from "./services/digestService.js";
 import { InsightService } from "./services/insightService.js";
 import { KnowledgeBase } from "./services/knowledgeBase.js";
+import { LiveService } from "./services/liveService.js";
 import { type Mailer, createMailer } from "./services/mailer.js";
 import { MarketService, type SyncResult } from "./services/marketService.js";
 import { Notifier } from "./services/notifier.js";
@@ -32,6 +33,7 @@ export interface App {
 	mailer: Mailer;
 	kb: KnowledgeBase;
 	market: MarketService;
+	live: LiveService;
 	insights: InsightService;
 	notifier: Notifier;
 	alerts: AlertService;
@@ -65,10 +67,9 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 	const vectors = config.qdrant ? new VectorStore(config.qdrant) : null;
 	const mailer = overrides.mailer ?? createMailer(config.email);
 	const kb = new KnowledgeBase(db, ai, vectors);
-	const market = new MarketService(db, kb, {
-		usSymbols: config.markets.usSymbols,
-		coingecko: new CoinGecko(config.coingeckoApiKey),
-	});
+	const coingecko = new CoinGecko(config.coingeckoApiKey);
+	const market = new MarketService(db, kb, { usSymbols: config.markets.usSymbols, coingecko });
+	const live = new LiveService(db, coingecko);
 	const telegram = config.telegram ? new TelegramClient(config.telegram.botToken) : null;
 	const insights = new InsightService(db, ai, kb, market);
 	const notifier = new Notifier(mailer, telegram, config.mode, config.appUrl);
@@ -95,6 +96,7 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 		mailer,
 		kb,
 		market,
+		live,
 		insights,
 		notifier,
 		alerts,

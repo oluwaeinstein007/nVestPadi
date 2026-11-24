@@ -131,7 +131,8 @@ securities.venue/industry/market_cap/source_id   listing metadata; source_id = C
 
 `nvest serve` starts a `Scheduler`:
 
-- **Sync** every `--sync-every` minutes (never overlapping), then **backfill** symbols with fewer than 60 sessions (NGX 40, US 15, crypto 5 per run). Each symbol is retried at most once a day, so a slow or rate-limited source is never hammered.
+- **Sync** every `--sync-every` minutes (never overlapping), then **backfill** symbols with fewer than 60 sessions (NGX 40, US 15, crypto 5 per run). Each symbol is retried at most once a day, so a slow or rate-limited source is never hammered. Coins stored before daily candles were available get one try at Yahoo OHLC history.
+- **Live sync**: while a market is open (`src/markets/hours.ts`), it's re-synced every `LIVE_SYNC_MINUTES` (default 5) without knowledge-base indexing, so prices, portfolio values, signals and alerts follow the session. The stock view separately polls `GET /api/securities/:exchange/:symbol/live` (`LiveService`, 20-second cache) for a near-live price and 5-minute candles.
 - **Digests** are checked every minute. Once a market's time passes on a trading day, it re-syncs if the data is older than 20 minutes, claims `digest:<MARKET>:<day>`, posts the market digest to the broadcast channels, then sends personal digests (`users.last_digest_on` is set before sending, so a crash can't double-send).
 - **Telegram** uses a webhook when a secret and an https `APP_URL` are configured, otherwise long polling. Only one instance per bot token should run either mode.
 

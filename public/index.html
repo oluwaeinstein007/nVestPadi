@@ -178,11 +178,12 @@
 						<p class="kicker">Deep dive</p>
 						<h2>From ticker to thesis in one click.</h2>
 						<p class="section-lead">
-							Open any stock for an interactive chart with moving-average overlays, performance from one week to one year, and indicator
-							cards that tell you what each number means.
+							Open any stock for a candlestick chart (or line) with moving-average overlays and today's 5-minute candles for US stocks
+							and crypto, a buy or sell signal with its entry, stop and target, and indicator cards that tell you what each number means.
 						</p>
 						<ul class="checks">
-							<li>BUY/SELL signals from several indicators, with the reasoning shown</li>
+							<li>Buy and sell signals with a stop and target, and how often that signal has worked on that stock before</li>
+							<li>Signal alerts, and a SELL flag on portfolio holdings when it's time to consider trimming</li>
 							<li>An RSI gauge that shows overbought and oversold zones</li>
 							<li>One-tap watchlist, alerts and "Ask AI about this stock"</li>
 							<li>Shareable links like <code>/app#NGX:GTCO</code> to send to your investment club</li>
@@ -381,7 +382,11 @@ pnpm nvest market</code></pre>
 					</details>
 					<details>
 						<summary>Where does the data come from, and how fresh is it?</summary>
-						<p>NGX prices come from the exchange's public daily board, with history from afx.kwayisi.org; US prices from Yahoo Finance, with sectors from Nasdaq; crypto from CoinGecko. Stocks are end-of-day and refreshed after each session; crypto shows a rolling 24-hour change.</p>
+						<p>NGX prices come from the exchange's public daily board, with history from afx.kwayisi.org; US prices from Yahoo Finance, with sectors from Nasdaq; crypto from CoinGecko. While a market is open the server refreshes it every few minutes. US stocks and crypto show a near-live price (Yahoo Finance) with today's 5-minute candles. NGX has no free intraday feed, so NGX prices are delayed by a few minutes and only have daily candles. Crypto shows a rolling 24-hour change.</p>
+					</details>
+					<details>
+						<summary>Does it tell me what to buy or sell, and how often it's right?</summary>
+						<p>It flags stocks with a fresh breakout signal, with an entry, stop loss, target and time frame, and shows how often the same signal worked on that stock in the past next to how often a random entry did. Signals with a thin or poor track record are hidden by default. In our tests on about ten years of prices, these signals beat a random entry on NGX stocks but showed no reliable edge on US stocks or crypto, and the app shows that record openly. Success rates are past results before fees, not predictions, and nothing here is investment advice.</p>
 					</details>
 					<details>
 						<summary>Can the AI make up numbers?</summary>
@@ -420,7 +425,7 @@ pnpm nvest market</code></pre>
 			<div class="container footer-inner">
 				<a class="brand" href="/"><img src="/favicon.svg" alt="" width="22" height="22" /><span>nVest<strong>Padi</strong></span></a>
 				<p>
-					Market data from NGX, Yahoo Finance and afx.kwayisi.org. It is end-of-day or delayed. nVestPadi is a research tool and
+					Market data from NGX, Yahoo Finance, CoinGecko and afx.kwayisi.org. US and crypto prices are near-live; NGX prices are delayed. nVestPadi is a research tool and
 					<b>not investment advice</b>.
 				</p>
 				<nav class="footer-links" aria-label="Footer">

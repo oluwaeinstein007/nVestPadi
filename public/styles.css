@@ -903,6 +903,218 @@ table.data .sym span {
 	vertical-align: middle;
 	margin-right: 4px;
 }
+.legend {
+	flex-wrap: wrap;
+}
+
+/* Candlesticks: filled bodies, wicks in the same colour. */
+.chart .candle line {
+	stroke-width: 1;
+}
+.chart .candle.up rect,
+.chart .candle.up line {
+	fill: var(--up);
+	stroke: var(--up);
+}
+.chart .candle.down rect,
+.chart .candle.down line {
+	fill: var(--down);
+	stroke: var(--down);
+}
+.chart .mark.buy {
+	fill: var(--up);
+}
+.chart .mark.sell {
+	fill: var(--down);
+}
+.chart-bar {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.chart-bar .tabs {
+	margin: 4px 0 8px;
+}
+
+/* Live price status next to the price in the detail drawer. */
+.live-pill {
+	font-size: 12px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--surface-2);
+	color: var(--muted);
+	white-space: nowrap;
+}
+.live-pill.live {
+	background: var(--up-bg);
+	color: var(--up);
+}
+.live-pill.delayed {
+	color: var(--warn);
+}
+
+/* Signal card in the drawer. */
+.call {
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: 12px 14px;
+	display: grid;
+	gap: 8px;
+	margin-bottom: 18px;
+}
+.call.BUY {
+	border-left: 4px solid var(--up);
+}
+.call.SELL {
+	border-left: 4px solid var(--down);
+}
+.call p {
+	margin: 0;
+}
+.call-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.call-head .grow {
+	flex: 1;
+}
+.trade-plan {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 8px;
+}
+.trade-plan div {
+	background: var(--surface-2);
+	border-radius: 8px;
+	padding: 6px 8px;
+	display: grid;
+}
+.trade-plan span,
+.trade-plan small {
+	font-size: 11px;
+	color: var(--muted);
+}
+.trade-plan b {
+	font-variant-numeric: tabular-nums;
+}
+.call .how summary {
+	cursor: pointer;
+	font-size: 12px;
+	color: var(--muted);
+}
+.call .how p {
+	font-size: 12px;
+	color: var(--muted);
+	margin-top: 6px;
+}
+
+/* Past success rate badge: green when it beats chance with enough history, amber when too thin. */
+.rate {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 3px;
+	padding: 2px 8px;
+	border-radius: 6px;
+	font-size: 13px;
+	font-weight: 700;
+	background: var(--surface-2);
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+.rate small {
+	font-weight: 400;
+	font-size: 11px;
+	color: var(--muted);
+}
+.rate.good {
+	background: var(--up-bg);
+	color: var(--up);
+}
+.rate.thin {
+	color: var(--warn);
+}
+.rate.weak {
+	color: var(--down);
+}
+.rate.none {
+	font-weight: 400;
+	font-size: 12px;
+	color: var(--muted);
+}
+.signal.small {
+	padding: 1px 6px;
+	font-size: 10px;
+	margin-left: 4px;
+	text-transform: uppercase;
+}
+
+/* Buy & sell signals list on the dashboard. */
+.signals {
+	list-style: none;
+	margin: 8px 0 0;
+	padding: 0;
+	display: grid;
+	gap: 6px;
+}
+.signals li button {
+	width: 100%;
+	display: grid;
+	grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.4fr) auto;
+	gap: 10px;
+	align-items: center;
+	text-align: left;
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface);
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+.signals li button:hover {
+	background: var(--surface-2);
+}
+.signals li button.more {
+	display: inline;
+	width: auto;
+	padding: 4px 0;
+	border: 0;
+	background: none;
+	color: var(--brand);
+	font-size: 13px;
+	text-decoration: underline;
+}
+.signals .sym,
+.signals .lv {
+	display: grid;
+	min-width: 0;
+}
+.signals .sym b {
+	display: inline;
+}
+.signals .name {
+	font-size: 12px;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+@media (max-width: 640px) {
+	.trade-plan {
+		grid-template-columns: repeat(2, 1fr);
+	}
+	.signals li button {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+	.signals .lv {
+		grid-column: 1 / -1;
+		grid-row: 2;
+	}
+}
 .perf {
 	display: grid;
 	grid-template-columns: repeat(5, 1fr);

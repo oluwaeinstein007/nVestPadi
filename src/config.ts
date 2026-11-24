@@ -62,6 +62,8 @@ export interface Config {
 	};
 	/** Send daily market digests to broadcast channels and personal digests to users. */
 	digests: boolean;
+	/** While a market is open, re-sync it this often (minutes); 0 = only the regular sync. */
+	liveSyncMinutes: number;
 	coingeckoApiKey: string | null;
 	/** Non-fatal problems, e.g. variables from older versions that are now ignored. */
 	warnings: string[];
@@ -158,6 +160,7 @@ const EnvSchema = z
 			.optional(),
 		DISCORD_BOT_TOKEN: z.string().optional(),
 		DAILY_DIGEST: bool.default("true"),
+		LIVE_SYNC_MINUTES: z.coerce.number().int().min(0).max(240).default(5),
 		COINGECKO_API_KEY: z.string().optional(),
 	})
 	.superRefine((env, ctx) => {
@@ -287,6 +290,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 					: null,
 		},
 		digests: env.DAILY_DIGEST,
+		liveSyncMinutes: env.LIVE_SYNC_MINUTES,
 		coingeckoApiKey: env.COINGECKO_API_KEY ?? null,
 		warnings,
 	};

@@ -159,6 +159,23 @@ describe("HTTP API (cloud mode)", () => {
 		assert.equal(snapshot.count, 2);
 	});
 
+	it("serves signal ideas and NGX live quotes from stored data", async () => {
+		const signals = await json<{ ideas: unknown[]; market: { BUY: { symbols: number } }; rules: { horizon: number } }>(
+			await call("/api/signals?exchange=NGX&side=BUY", { cookie: owner }),
+		);
+		assert.ok(Array.isArray(signals.ideas));
+		assert.equal(signals.market.BUY.symbols, 2);
+		assert.equal(signals.rules.horizon, 20);
+		// NGX has no intraday feed: the live endpoint returns the stored board price, without candles.
+		const live = await json<{ price: number; candles: unknown[]; freshness: string }>(
+			await call("/api/securities/NGX/GTCO/live", { cookie: owner }),
+		);
+		assert.equal(live.price, 169);
+		assert.deepEqual(live.candles, []);
+		assert.ok(["delayed", "close"].includes(live.freshness));
+		assert.equal((await call("/api/securities/NGX/NOPE/live", { cookie: owner })).status, 404);
+	});
+
 	it("validates input with 400s", async () => {
 		assert.equal((await call("/api/market?exchange=LSE", { cookie: owner })).status, 400);
 		const bad = await call("/api/alerts", { cookie: owner, body: { symbol: "GTCO", condition: "nope", threshold: 1 } });

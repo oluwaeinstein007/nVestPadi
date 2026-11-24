@@ -1,6 +1,8 @@
 /** Market data, screener, security detail, watchlist and alerts. */
 import { z } from "zod";
+import { signalIdeas, signalSummary } from "../../analysis/ideas.js";
 import { SCREEN_SORTS, marketOverview, screen } from "../../analysis/market.js";
+import { MIN_TRADES, SIGNAL_DEFAULTS } from "../../analysis/signals.js";
 import type { App } from "../../app.js";
 import { NotFoundError } from "../../lib/errors.js";
 import { rateLimiter } from "../../lib/rateLimit.js";
@@ -78,6 +80,30 @@ export function marketRoutes(r: Router, app: App) {
 		const report = await app.market.report(ctx.params.symbol as string, exchange);
 		const history = app.db.market.history(exchange, report.security.symbol, 730);
 		return { report, history, watched: app.watchlists.has(ctx.user, exchange, report.security.symbol) };
+	});
+
+	// Latest price plus today's intraday candles where the source has them.
+	r.get(
+		"/api/securities/:exchange/:symbol/live",
+		(ctx) => app.live.quote(exchangeSchema.parse(ctx.params.exchange), ctx.params.symbol as string),
+		{ limit: rateLimiter(240, 60_000) },
+	);
+
+	// -- Signals: what to look at buying or selling now, with each idea's track record --
+	r.get("/api/signals", ({ query }) => {
+		const q = z
+			.object({
+				exchange: exchangeSchema.default("NGX"),
+				side: z.enum(["BUY", "SELL"]).optional(),
+				minWinRate: optionalNumber,
+				limit: z.coerce.number().int().min(1).max(200).default(50),
+			})
+			.parse(queryObject(query));
+		return {
+			ideas: signalIdeas(app.db, q.exchange, q),
+			market: signalSummary(app.db, q.exchange),
+			rules: { ...SIGNAL_DEFAULTS, minTrades: MIN_TRADES },
+		};
 	});
 
 	// -- Watchlist ---------------------------------------------------------------------

@@ -156,6 +156,27 @@ export class CoinGecko {
 		return withChanges([...byDate.values()]);
 	}
 
+	/** Candles for the last `days` (1 day → 30-minute candles), oldest first. */
+	async ohlc(
+		coinId: string,
+		days: 1 | 7 | 14 | 30 = 1,
+	): Promise<{ time: string; open: number; high: number; low: number; close: number; volume: null }[]> {
+		const rows = await getJson<[number, number, number, number, number][]>(
+			`${API}/coins/${encodeURIComponent(coinId)}/ohlc?vs_currency=usd&days=${days}`,
+			{ headers: this.headers, retries: 2 },
+		);
+		// CoinGecko stamps each candle with its close time; report the start like Yahoo does.
+		const step = rows.length > 1 ? (rows[1] as number[])[0] - (rows[0] as number[])[0] : 30 * 60_000;
+		return rows.map(([t, open, high, low, close]) => ({
+			time: new Date(t - step).toISOString(),
+			open,
+			high,
+			low,
+			close,
+			volume: null,
+		}));
+	}
+
 	/** Find a coin id by ticker or name (for coins outside the synced top list). */
 	async search(query: string): Promise<Security | null> {
 		const data = await getJson<{

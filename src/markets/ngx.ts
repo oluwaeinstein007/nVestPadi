@@ -61,10 +61,7 @@ export async function fetchNgxSnapshot(): Promise<MarketSnapshot> {
 		if (data.length < PAGE_SIZE) break;
 	}
 
-	const names = await fetchAfxNames().catch((err) => {
-		logger.debug("afx name lookup failed; using NGX symbols as names", { error: String(err) });
-		return new Map<string, string>();
-	});
+	const names = await cachedAfxNames();
 
 	const securities: Security[] = [];
 	const bars: PriceBar[] = [];
@@ -100,6 +97,22 @@ export async function fetchNgxSnapshot(): Promise<MarketSnapshot> {
 		});
 	}
 	return { securities, bars };
+}
+
+/** Names rarely change, and live syncs run every few minutes: reuse them for 12 hours. */
+const NAMES_TTL_MS = 12 * 60 * 60_000;
+let namesCache: { at: number; names: Map<string, string> } | null = null;
+
+async function cachedAfxNames(): Promise<Map<string, string>> {
+	if (namesCache && Date.now() - namesCache.at < NAMES_TTL_MS) return namesCache.names;
+	try {
+		const names = await fetchAfxNames();
+		if (names.size > 0) namesCache = { at: Date.now(), names };
+		return names;
+	} catch (err) {
+		logger.debug("afx name lookup failed; using NGX symbols as names", { error: String(err) });
+		return namesCache?.names ?? new Map<string, string>();
+	}
 }
 
 /** Ticker → company name from the (paginated) afx.kwayisi.org listing. */

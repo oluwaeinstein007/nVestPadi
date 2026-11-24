@@ -2,10 +2,12 @@
  * Grounded AI answers ("ask"). Context is assembled from:
  *  1. Technical reports for tickers/companies mentioned in the question
  *  2. Market breadth + movers when the question is about the market
+ *  2b. Current BUY/SELL signal lists (with past success rates) for "what should I buy/sell" questions
  *  3. Semantic search over ingested documents and quote history (if Qdrant is set)
  * The model is instructed to answer only from that context and cite it.
  */
 import type { AIProvider } from "../ai/provider.js";
+import { signalIdeas, signalSummary } from "../analysis/ideas.js";
 import { marketOverview } from "../analysis/market.js";
 import { reportToText } from "../analysis/report.js";
 import { FeatureUnavailableError } from "../lib/errors.js";
@@ -38,10 +40,13 @@ Rules:
 - If the context doesn't cover the question, say so plainly and suggest what would help (e.g. opening the stock in nVestPadi to load its history, or adding research documents).
 - Prefer specifics: numbers, percentages, dates. Use NGN for NGX prices and USD for US stocks and crypto.
 - Be concise: a direct answer first, then short supporting bullets.
+- When asked what to buy or sell, or when, use the signal lists and snapshots: name the securities, their entry/stop/target levels and each signal's past success rate with how many past signals it's based on. Say plainly that success rates are historical, before fees, and not a guarantee; fewer than 5 past signals is too few to rely on.
 - You provide information, not personalised investment advice.`;
 
 const MARKET_WORDS =
 	/\b(market|markets|gainers?|losers?|movers?|sectors?|breadth|today|this week|rall(y|ied)|top|best|worst|biggest|index|asi|crypto|coins?)\b/i;
+const SIGNAL_WORDS =
+	/\b(buy|buying|sell|selling|signals?|recommend\w*|invest in|entry|exit|stop.?loss|target|when to|should i|opportunit\w*|ideas?|picks?)\b/i;
 const NAME_SUFFIX = /\s+(plc|inc\.?|corp(oration)?\.?|holdings?|limited|ltd\.?|company|co\.?|group)\b.*$/i;
 
 export class InsightService {
@@ -110,6 +115,37 @@ export class InsightService {
 						`Most traded by value: ${o.mostActive.map((q) => q.symbol).join(", ")}. ` +
 						`Sector average change: ${o.sectors.map((s) => `${s.sector} ${s.avgChangePct}%`).join("; ")}.`,
 				});
+			}
+		}
+
+		if (SIGNAL_WORDS.test(question)) {
+			const exchanges: Exchange[] = options.exchange ? [options.exchange] : [...EXCHANGES];
+			for (const exchange of exchanges) {
+				for (const side of ["BUY", "SELL"] as const) {
+					const ideas = signalIdeas(this.db, exchange, { side, limit: 8 });
+					if (ideas.length === 0) continue;
+					const list = ideas
+						.map((i) => {
+							const p = i.call.plan;
+							const t = i.call.track;
+							const levels = p ? ` entry ${p.entry}, stop ${p.stop}, target ${p.target}, ~${p.horizon} sessions;` : "";
+							const record = t.trades
+								? ` past ${side} signals worked ${t.winRate}% of ${t.trades} (random: ${t.baseRate}%)`
+								: " no past record";
+							return `${i.symbol} (${i.name}) ${i.call.strength} ${side} at ${i.currency} ${i.close} on ${i.call.date}:${levels}${record}`;
+						})
+						.join("; ");
+					const m = signalSummary(this.db, exchange)[side];
+					const overall = m.trades
+						? ` Across the market, past ${side} signals worked ${m.winRate}% of ${m.trades} vs ${m.baseRate}% for a random entry.`
+						: "";
+					context.push({
+						title: `${exchange} current ${side} signals`,
+						source: `${exchange}:signals`,
+						kind: "analysis",
+						text: `${exchange} securities with a fresh ${side} signal (best-evidenced first): ${list}.${overall} Success rates come from replaying past signals, before fees.`,
+					});
+				}
 			}
 		}
 

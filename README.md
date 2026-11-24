@@ -78,13 +78,15 @@ Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps th
 | | |
 |---|---|
 | 📊 **Market breadth** | Advancers vs decliners, value traded, top gainers and losers, the most traded stocks, and every sector ranked by its move |
-| 📈 **Technical reports** | Trend, RSI, MACD, SMA 20/50/200, Bollinger Bands, ATR, volatility, 52-week range, 1W–1Y performance and BUY/SELL signals with reasons |
+| 📈 **Technical reports** | Trend, RSI, MACD, SMA 20/50/200, Bollinger Bands, ATR, volatility, 52-week range and 1W–1Y performance |
+| 🎯 **Buy & sell signals** | Fresh breakout signals per market with entry, stop, target and time frame, each with its own **success rate** (past signals on that stock replayed with the same rules) next to a random-entry baseline; evidence-backed ideas first. SELL flags on portfolio holdings, signal alerts, and grounding for "what should I buy?" questions. See [how signals are chosen and scored](#how-signals-are-chosen-and-scored) |
 | 🔎 **Screener** | Filter by sector, name, price and RSI (e.g. *oversold banks*); sort by gainers, losers, value, volume or RSI |
 | 🌍 **Three markets** | NGX (~150 equities), US stocks with NYSE/Nasdaq venue, sector, industry and market cap, and the top 100 crypto coins |
 | ⭐ **Watchlist** | Per-user NGX, US and crypto symbols side by side, with sparklines |
 | 💼 **Portfolio** | Positions with average cost, live value, today's and total P&L, and weights, per currency (NGN and USD are never mixed) |
-| 🟩 **Heatmap & charts** | Most-traded names sized by value and coloured by move; price chart with 1M–2Y ranges, SMA overlays and volume |
-| 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`; one digest per user per sync; re-arm after firing |
+| 🟩 **Heatmap & charts** | Most-traded names sized by value and coloured by move; candlestick or line chart with 1D (5-minute) to 2Y ranges, SMA overlays, volume and past-signal markers |
+| ⚡ **Live prices** | While a market is open, `serve` re-syncs it every `LIVE_SYNC_MINUTES` (default 5), and the stock view polls a near-live price for US stocks and crypto. NGX is delayed (no free intraday feed) |
+| 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`, `signal-buy`, `signal-sell` (threshold = minimum past success rate); one digest per user per sync; re-arm after firing |
 | 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
 | 📰 **Daily digests** | Market wrap-ups to a Telegram channel and Discord webhook; personal digests built only from each user's own data |
 | 💬 **Ask AI** | Answers grounded in live reports, market breadth and the research library, with numbered citations |
@@ -232,6 +234,7 @@ Every variable is optional, and [`.env.example`](.env.example) documents each on
 | `DISCORD_WEBHOOK_URL` | — | Channel for market digests |
 | `DISCORD_APPLICATION_ID` + `DISCORD_PUBLIC_KEY` (+ `DISCORD_BOT_TOKEN`) | — | Slash commands via the interactions endpoint |
 | `DAILY_DIGEST` | `true` | Market and personal digests while `serve` runs |
+| `LIVE_SYNC_MINUTES` | `5` | While a market is open, re-sync it this often (needs `serve --sync-every`); `0` turns it off |
 | `COINGECKO_API_KEY` | — | Optional free demo key for higher crypto rate limits |
 | `AI_PROVIDER` / `AI_API_KEY` | — | `openai` or `gemini`; enables Ask, search and ingest |
 | `AI_CHAT_MODEL` / `AI_EMBEDDING_MODEL` / `AI_EMBEDDING_DIMENSIONS` | per provider | Model overrides |
@@ -264,7 +267,9 @@ curl -H "Authorization: Bearer nvp_…" https://app.yourdomain.com/api/watchlist
 | POST | `/api/account/password` | user | Change password (signs out other sessions) |
 | GET · DELETE | `/api/account/sessions` | user | List · sign out other sessions |
 | GET · POST · DELETE | `/api/account/tokens` · `/:id` | user | Personal API tokens (shown once) |
-| GET | `/api/market` · `/api/screen` · `/api/securities` · `/api/securities/:exchange/:symbol` | user | Market data, screener, search, report |
+| GET | `/api/market` · `/api/screen` · `/api/securities` · `/api/securities/:exchange/:symbol` | user | Market data, screener, search, report (with `call`, `track` and past `trades`) |
+| GET | `/api/securities/:exchange/:symbol/live` | user | Latest price, freshness (`live`/`delayed`/`close`) and today's 5-minute candles |
+| GET | `/api/signals?exchange=NGX&side=BUY&minWinRate=` | user | Current signal ideas with plans and success rates, plus the market-wide record |
 | GET · POST · DELETE | `/api/watchlist` · `/:exchange/:symbol` | user | Watchlist |
 | GET · POST · DELETE | `/api/alerts` · `/:id` · POST `/:id/rearm` | user | Alerts |
 | GET · POST · PUT · DELETE | `/api/portfolio` · `/:id` | user | Portfolio positions with P&L (adding an existing symbol averages the cost) |
@@ -301,8 +306,16 @@ SQLite is the source of truth for prices, accounts and user data. Qdrant only st
 ## Data sources & limitations
 
 - **NGX**: the daily board (OHLC, volume, value, sector) comes from NGX's public statistics API. Company names and up to 2 years of daily closes come from afx.kwayisi.org and are backfilled automatically, so every indicator works from day one. Historical bars are close-only; full OHLC accumulates from daily syncs.
-- **US**: prices and the listing venue (NYSE, Nasdaq…) from Yahoo Finance's public chart API; sector, industry and market cap from Nasdaq's public screener, refreshed daily. End-of-day or delayed, occasionally rate-limited; requests retry with backoff.
-- **Crypto**: CoinGecko's public API — the top 100 coins by market cap, with a rolling 24-hour change and a year of daily closes fetched on demand. Without a key the rate limit is low, so history backfills slowly; `COINGECKO_API_KEY` helps.
+- **US**: prices and the listing venue (NYSE, Nasdaq…) from Yahoo Finance's public chart API; sector, industry and market cap from Nasdaq's public screener, refreshed daily. The stock view's live price and 5-minute candles also come from Yahoo; occasionally rate-limited; requests retry with backoff.
+- **Crypto**: CoinGecko's public API — the top 100 coins by market cap, with a rolling 24-hour change. Daily candles come from Yahoo (`BTC-USD`) when its price agrees with CoinGecko's within 5%, otherwise from CoinGecko's daily closes. Without a CoinGecko key the rate limit is low; `COINGECKO_API_KEY` helps.
+- **Freshness**: NGX's board updates during the session, but there's no free intraday NGX feed, so NGX prices are delayed and only have daily candles. US and crypto prices in the stock view are near-live.
+
+### How signals are chosen and scored
+
+- **Rules:** a BUY is a close at a new 50-session high while above the 200-day average (a breakout in an uptrend); a SELL is a new 50-session low below it. Strong = volume ≥ 1.5× its 20-day average. Only signals from the last 3 sessions are "current". Code: [`src/analysis/signals.ts`](src/analysis/signals.ts).
+- **Plan:** entry at the latest price, stop 2× ATR away (at least 2%), target 3× ATR, about 20 sessions to work.
+- **Success rate:** every past signal on that security is replayed with the same plan: enter at the next open, exit at the stop, target, an opposite signal or after 20 sessions. Gaps through a stop fill at the open; close-only history is checked on the close. Returns are before fees. Fewer than 5 past signals is flagged as too few.
+- **Why these rules:** four rule sets were replayed on ~10 years of 24 large NGX stocks, 17 US stocks and 10 coins, chosen on data before Nov 2023 and checked on the three years after. Only NGX breakout BUYs beat a random entry in both periods (≈58–61% of trades profitable vs ≈47–49%). The previous indicator vote did no better than chance anywhere, and US, crypto and SELL signals showed no reliable edge with any rule set. Breakouts on thinly traded NGX small caps also do poorly. That's why each idea carries its own record, the market-wide record is shown next to a random entry, and only evidence-backed ideas are listed by default.
 - These are unofficial public endpoints and may change without notice. A commercial deployment should license its market data.
 
 > **Disclaimer:** nVestPadi is a research and education tool. Nothing it produces is investment advice. The bundled [Terms](public/terms.html) and [Privacy Policy](public/privacy.html) are a starting point; have them reviewed before you operate a hosted service.

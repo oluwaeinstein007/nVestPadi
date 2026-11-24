@@ -101,6 +101,19 @@
 				</section>
 
 				<section class="card">
+					<div class="card-head">
+						<h2>Buy &amp; sell signals</h2>
+						<div class="tabs" role="tablist" aria-label="Signal side">
+							<button role="tab" data-side="BUY" aria-selected="true">Buy</button>
+							<button role="tab" data-side="SELL" aria-selected="false">Sell</button>
+						</div>
+					</div>
+					<p class="muted small">Stocks with a fresh moderate or strong signal, with an entry, stop and target, and how often this signal has worked on that stock before. Best-evidenced first.</p>
+					<ul id="signals" class="signals"></ul>
+					<p class="muted small" id="signals-note"></p>
+				</section>
+
+				<section class="card">
 					<div class="card-head"><h2>Sectors</h2><span class="muted small">average daily change</span></div>
 					<div id="sectors" class="sectors"></div>
 				</section>
@@ -180,7 +193,7 @@
 		</main>
 
 		<footer class="footer muted small">
-			Data: NGX, Yahoo Finance, afx.kwayisi.org · Delayed, end-of-day · Information only, not investment advice ·
+			Data: NGX, Yahoo Finance, CoinGecko, afx.kwayisi.org · US &amp; crypto near-live, NGX delayed · Signals are educational and their success rates are past results, not predictions · Not investment advice ·
 			<a href="/terms">Terms</a> · <a href="/privacy">Privacy</a>
 		</footer>
 

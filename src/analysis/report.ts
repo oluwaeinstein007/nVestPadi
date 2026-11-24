@@ -4,6 +4,7 @@ import { round } from "../lib/util.js";
  * horizons, 52-week range, key indicators, trend and a plain-English summary.
  */
 import type { PriceBar, Security } from "../markets/types.js";
+import { type BacktestTrade, type SignalAnalysis, analyzeSignals, describeTrack } from "./signals.js";
 import * as ta from "./technicalAnalysis.js";
 
 export type Trend = "uptrend" | "downtrend" | "sideways" | "insufficient data";
@@ -25,7 +26,14 @@ export interface SecurityReport {
 		volatilityPct: number | null;
 	};
 	trend: Trend;
+	/** The latest raw indicator-vote signal (any strength) from the last 5 sessions. Prefer `call`. */
 	signal: ta.TradingSignal | null;
+	/** The actionable call (moderate/strong, last 3 sessions) with a trade plan and its track record. */
+	call: SignalAnalysis["call"];
+	track: SignalAnalysis["track"];
+	/** Past signal trades, for chart markers. */
+	trades: BacktestTrade[];
+	rules: SignalAnalysis["rules"];
 	highlights: string[];
 }
 
@@ -91,16 +99,17 @@ export function buildReport(security: Security, bars: PriceBar[]): SecurityRepor
 			: null;
 
 	const trend = classifyTrend(price, sma20, sma50);
-	const signals = ta.generateSignals(
+	const rawSignals = ta.generateSignals(
 		closes,
 		highs,
 		lows,
 		volumes,
 		bars.map((b) => b.date),
 	);
-	const lastSignal = signals[signals.length - 1];
+	const lastSignal = rawSignals[rawSignals.length - 1];
 	// Only surface a signal if it fired in the last 5 sessions.
 	const signal = lastSignal && lastSignal.index >= bars.length - 5 ? lastSignal : null;
+	const signals = analyzeSignals(bars);
 
 	const report: SecurityReport = {
 		security,
@@ -123,6 +132,10 @@ export function buildReport(security: Security, bars: PriceBar[]): SecurityRepor
 		},
 		trend,
 		signal,
+		call: signals.call,
+		track: signals.track,
+		trades: signals.trades,
+		rules: signals.rules,
 		highlights: [],
 	};
 	report.highlights = describe(report);
@@ -158,8 +171,22 @@ function describe(r: SecurityReport): string[] {
 		out.push(`Trading at ${r.range52w.positionPct}% of its ${r.bars >= 252 ? "52-week" : `${r.bars}-session`} range.`);
 	}
 	if (i.sma200 !== null) out.push(`Price is ${latest.close >= i.sma200 ? "above" : "below"} the 200-day average.`);
-	if (r.signal)
-		out.push(`Recent ${r.signal.strength} ${r.signal.signal} signal on ${r.signal.date}: ${r.signal.reason}.`);
+	if (r.call) {
+		const p = r.call.plan;
+		out.push(
+			`${r.call.strength === "strong" ? "Strong" : "Moderate"} ${r.call.side} signal on ${r.call.date}: ${r.call.reason}.`,
+		);
+		if (p) {
+			out.push(
+				p.side === "BUY"
+					? `Plan: buy near ${p.entry}, stop at ${p.stop} (−${p.riskPct}%), target ${p.target} (+${p.rewardPct}%), within about ${p.horizon} sessions.`
+					: `Plan: sell or trim near ${p.entry}; the call is wrong above ${p.stop} (+${p.riskPct}%); downside objective ${p.target} (−${p.rewardPct}%) within about ${p.horizon} sessions.`,
+			);
+		}
+		out.push(`Track record: ${describeTrack(r.call.track)}`);
+	} else if (r.bars >= 200) {
+		out.push("No buy or sell signal right now.");
+	}
 	if (r.bars < 26) out.push(`Only ${r.bars} sessions of history so far — more indicators appear as history builds up.`);
 	return out;
 }

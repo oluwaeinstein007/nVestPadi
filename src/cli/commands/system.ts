@@ -24,7 +24,10 @@ export const systemCommands: Record<string, Command> = {
 			const scheduler = new Scheduler(app);
 			onShutdown(() => scheduler.stop());
 			const every = num(flags["sync-every"], "sync-every");
-			if (every) scheduler.startSync(every, [...EXCHANGES]);
+			if (every) {
+				scheduler.startSync(every, [...EXCHANGES]);
+				if (app.config.liveSyncMinutes < every) scheduler.startLiveSync(app.config.liveSyncMinutes);
+			}
 			if (app.config.digests) scheduler.startDigests();
 			await scheduler.startTelegram();
 			await new Promise(() => undefined);

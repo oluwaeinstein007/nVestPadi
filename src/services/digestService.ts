@@ -10,6 +10,7 @@
  * multiple ticks never double-send.
  */
 import { marketOverview } from "../analysis/market.js";
+import { analyzeSignals } from "../analysis/signals.js";
 import { postDiscordWebhook } from "../integrations/discord.js";
 import { type TelegramClient, toTelegramHtml } from "../integrations/telegram.js";
 import { errorMessage, logger } from "../lib/logger.js";
@@ -123,6 +124,35 @@ export class DigestService {
 					.join("\n")}${top ? `\nBiggest mover: ${top.symbol} ${money(top.dayPnl, top.currency)} today` : ""}`,
 			);
 		}
+
+		// Fresh signals on what the user holds (a SELL = consider trimming) or watches.
+		const held = new Set(positions.map((p) => `${p.exchange}:${p.symbol}`));
+		const signalLines = [
+			...positions.filter((p) => p.signal?.date === day).map((p) => ({ ...p.signal, symbol: p.symbol, held: true })),
+			...this.watchlists
+				.list(user)
+				.filter((w) => !held.has(`${w.exchange}:${w.symbol}`))
+				.flatMap((w) => {
+					const bars = this.db.market.history(w.exchange, w.symbol, 730);
+					const call = bars.length >= 60 ? analyzeSignals(bars).call : null;
+					return call?.date === day
+						? [
+								{
+									side: call.side,
+									winRate: call.track.winRate,
+									trades: call.track.trades,
+									symbol: w.symbol,
+									held: false,
+								},
+							]
+						: [];
+				}),
+		].map((s) => {
+			const record = s.trades ? ` (past ${s.side} signals worked ${s.winRate}% of ${s.trades})` : "";
+			const what = s.held ? (s.side === "SELL" ? " — you hold it; consider trimming" : " — you hold it") : "";
+			return `${s.side === "BUY" ? "🟢" : "🔴"} ${s.side} ${s.symbol}${what}${record}`;
+		});
+		if (signalLines.length) paragraphs.push(`**New signals**\n${signalLines.join("\n")}`);
 
 		const alerts = this.db.alerts.listForUser(user.id);
 		const firedToday = alerts.filter((a) => a.triggeredAt?.startsWith(day));

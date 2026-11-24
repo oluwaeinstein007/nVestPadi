@@ -119,7 +119,25 @@ export const marketCommands: Record<string, Command> = {
 			out(
 				`  ${c.bold(`${r.security.currency} ${price(r.latest.close)}`)}  ${pct(r.latest.changePct)}  ${c.dim(r.latest.date)}   ${sparkline(closes)}`,
 			);
-			if (r.signal) out(`\n  ${signalBadge(r.signal.signal, r.signal.strength)} ${c.dim(r.signal.reason)}`);
+			if (r.call) {
+				const t = r.call.track;
+				out(`\n  ${signalBadge(r.call.side, r.call.strength)} ${c.dim(r.call.reason)}`);
+				if (r.call.plan) {
+					const p = r.call.plan;
+					out(
+						p.side === "BUY"
+							? `  Entry ~${price(p.entry)}  stop ${c.red(price(p.stop))} (−${p.riskPct}%)  target ${c.green(price(p.target))} (+${p.rewardPct}%)  ~${p.horizon} sessions`
+							: `  Sell/trim ~${price(p.entry)}  wrong above ${price(p.stop)} (+${p.riskPct}%)  downside ${price(p.target)} (−${p.rewardPct}%)  ~${p.horizon} sessions`,
+					);
+				}
+				out(
+					c.dim(
+						t.trades
+							? `  Past ${t.side} signals: ${t.wins}/${t.trades} worked (${t.winRate}%) · random entry ${t.baseRate}%${t.trades < r.rules.minTrades ? " · too few to rely on" : ""}`
+							: `  No past ${t.side} signals to measure yet`,
+					),
+				);
+			}
 			out(heading("Performance"));
 			out(
 				`  ${

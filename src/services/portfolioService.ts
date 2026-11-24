@@ -2,6 +2,7 @@
  * Portfolio tracking: positions with average cost, valued at the latest close.
  * Totals are per currency — NGN and USD positions are never summed together.
  */
+import { analyzeSignals } from "../analysis/signals.js";
 import type { AppMode } from "../config.js";
 import { NotFoundError, PlanLimitError, ValidationError } from "../lib/errors.js";
 import { round } from "../lib/util.js";
@@ -9,7 +10,7 @@ import type { Exchange } from "../markets/types.js";
 import type { Database } from "../storage/database.js";
 import type { Holding } from "../storage/repositories/holdings.js";
 import type { User } from "../storage/repositories/users.js";
-import type { MarketService } from "./marketService.js";
+import { MIN_HISTORY, type MarketService } from "./marketService.js";
 import { limitsFor } from "./plans.js";
 
 export interface Position extends Holding {
@@ -26,6 +27,19 @@ export interface Position extends Holding {
 	dayPnl: number | null;
 	/** Share of the portfolio's value in this currency, in %. */
 	weightPct: number | null;
+	/** The current BUY/SELL call on this holding, if any (a SELL = consider selling or trimming). */
+	signal: PositionSignal | null;
+}
+
+export interface PositionSignal {
+	side: "BUY" | "SELL";
+	strength: "strong" | "moderate";
+	date: string;
+	reason: string;
+	stop: number | null;
+	target: number | null;
+	winRate: number | null;
+	trades: number;
 }
 
 export interface PortfolioTotals {
@@ -75,6 +89,7 @@ export class PortfolioService {
 				pnlPct: pnl !== null && cost > 0 ? round((pnl / cost) * 100, 2) : null,
 				dayPnl: quote?.change != null ? round(h.quantity * quote.change, 2) : null,
 				weightPct: null,
+				signal: this.signal(h.exchange, h.symbol),
 			};
 		});
 
@@ -109,6 +124,23 @@ export class PortfolioService {
 		}
 		positions.sort((a, b) => (b.value ?? b.cost) - (a.value ?? a.cost));
 		return { positions, totals: [...totals.values()] };
+	}
+
+	private signal(exchange: Exchange, symbol: string): PositionSignal | null {
+		const bars = this.db.market.history(exchange, symbol, 730);
+		if (bars.length < MIN_HISTORY) return null;
+		const { call } = analyzeSignals(bars);
+		if (!call) return null;
+		return {
+			side: call.side,
+			strength: call.strength,
+			date: call.date,
+			reason: call.reason,
+			stop: call.plan?.stop ?? null,
+			target: call.plan?.target ?? null,
+			winRate: call.track.winRate,
+			trades: call.track.trades,
+		};
 	}
 
 	/** Record a buy. Buying more of a held security averages the cost. */

@@ -1,6 +1,7 @@
 /**
  * Background jobs for `nvest serve`:
  * - periodic sync + alert check (never overlapping; failures logged, not fatal)
+ * - faster "live" syncs of each market while it's open
  * - history backfill for symbols with too little data, after each sync
  * - daily digests (checked every minute, idempotent per day)
  * - Telegram bot delivery: webhook when APP_URL is https and a secret is set,
@@ -9,6 +10,7 @@
 import type { App } from "./app.js";
 import { handleTelegramUpdate, telegramCommands } from "./integrations/handlers.js";
 import { errorMessage, logger } from "./lib/logger.js";
+import { isMarketOpen } from "./markets/hours.js";
 import { EXCHANGES, type Exchange } from "./markets/types.js";
 
 /** How many thin-history symbols to backfill per market after each sync. */
@@ -59,6 +61,27 @@ export class Scheduler {
 		} finally {
 			this.syncing = null;
 		}
+	}
+
+	/**
+	 * While a market is open, re-sync it every `everyMinutes` so prices, portfolio
+	 * values, signals and alerts follow the session. Skips the knowledge-base
+	 * indexing the regular sync does (that would re-embed quotes every few minutes).
+	 */
+	startLiveSync(everyMinutes: number, exchanges: Exchange[] = [...EXCHANGES]) {
+		if (everyMinutes < 1) return;
+		// Counted from the last attempt, not the last success, so a source that's down isn't retried every minute.
+		const attempted = new Map<Exchange, number>();
+		const tick = () => {
+			const now = new Date();
+			const since = (e: Exchange) => Date.now() - Math.max(this.lastSync.get(e) ?? 0, attempted.get(e) ?? 0);
+			const due = exchanges.filter((e) => isMarketOpen(e, now) && since(e) >= everyMinutes * 60_000 - 5_000);
+			if (due.length === 0 || this.syncing) return;
+			for (const e of due) attempted.set(e, Date.now());
+			void this.sync(due, { index: false });
+		};
+		this.timers.push(setInterval(tick, 60_000));
+		logger.info(`scheduler: live sync every ${everyMinutes} min while markets are open`);
 	}
 
 	private async backfill(exchanges: Exchange[]) {

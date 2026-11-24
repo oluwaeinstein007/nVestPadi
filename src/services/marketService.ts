@@ -5,7 +5,7 @@
  * Sources per market:
  * - NGX: NGX statistics API (daily board) + afx.kwayisi.org (names, ~10y closes)
  * - US: Yahoo Finance (prices, venue) + Nasdaq screener (sector, industry, market cap)
- * - CRYPTO: CoinGecko (top coins by market cap, daily history)
+ * - CRYPTO: CoinGecko (top coins by market cap, daily closes) + Yahoo (daily candles)
  */
 import { type SecurityReport, buildReport } from "../analysis/report.js";
 import { NotFoundError } from "../lib/errors.js";
@@ -16,7 +16,7 @@ import type { CoinGecko } from "../markets/coingecko.js";
 import { fetchUsListings } from "../markets/nasdaq.js";
 import { fetchNgxHistory, fetchNgxSnapshot } from "../markets/ngx.js";
 import { EXCHANGES, type Exchange, type MarketSnapshot, type PriceBar } from "../markets/types.js";
-import { type YahooRange, fetchUsHistory, fetchUsSnapshot } from "../markets/yahoo.js";
+import { type YahooRange, fetchCryptoHistory, fetchUsHistory, fetchUsSnapshot } from "../markets/yahoo.js";
 import type { Database } from "../storage/database.js";
 import type { KnowledgeBase } from "./knowledgeBase.js";
 
@@ -143,8 +143,32 @@ export class MarketService {
 		const known = this.db.market.getSecurity("CRYPTO", ticker);
 		const security = known?.sourceId ? known : await this.options.coingecko.search(ticker);
 		if (!security?.sourceId) throw new Error(`Unknown crypto symbol ${ticker}`);
+		const ohlc = await this.cryptoOhlc(ticker);
+		if (ohlc) return { securities: [security], bars: ohlc };
 		const bars: PriceBar[] = await this.options.coingecko.history(security.sourceId, ticker);
 		return { securities: [security], bars };
+	}
+
+	/**
+	 * Daily candles for a coin from Yahoo, which CoinGecko's free API only has as
+	 * closes. Tickers aren't unique across coins, so the history is only used when
+	 * its latest close is within 5% of the price CoinGecko gave us for this coin.
+	 */
+	private async cryptoOhlc(ticker: string): Promise<PriceBar[] | null> {
+		const reference = this.db.market.latestQuote("CRYPTO", ticker)?.close;
+		if (!reference) return null;
+		try {
+			const { bars } = await fetchCryptoHistory(ticker, "2y");
+			const latest = bars.at(-1)?.close;
+			if (!latest || Math.abs(latest - reference) / reference > 0.05) {
+				logger.debug("Yahoo crypto history doesn't match CoinGecko; using closes", { ticker, latest, reference });
+				return null;
+			}
+			return bars;
+		} catch (err) {
+			logger.debug("Yahoo crypto history unavailable", { ticker, error: errorMessage(err) });
+			return null;
+		}
 	}
 
 	/**
@@ -154,10 +178,17 @@ export class MarketService {
 	 */
 	async backfill(exchange: Exchange, options: { limit?: number; concurrency?: number } = {}): Promise<number> {
 		const today = isoDate(new Date());
-		const due = this.db.market
-			.thinHistory(exchange, MIN_HISTORY)
-			.filter((symbol) => this.db.jobs.get(`history:${exchange}:${symbol}`) !== today)
+		// Coins backfilled before candles were available get one try at OHLC history.
+		const upgrades =
+			exchange === "CRYPTO"
+				? this.db.market
+						.closeOnlyHistory(exchange, MIN_HISTORY)
+						.filter((symbol) => !this.db.jobs.get(`ohlc:${exchange}:${symbol}`))
+				: [];
+		const due = [...this.db.market.thinHistory(exchange, MIN_HISTORY), ...upgrades]
+			.filter((symbol) => upgrades.includes(symbol) || this.db.jobs.get(`history:${exchange}:${symbol}`) !== today)
 			.slice(0, options.limit ?? 50);
+		for (const symbol of due) if (upgrades.includes(symbol)) this.db.jobs.set(`ohlc:${exchange}:${symbol}`, today);
 		if (due.length === 0) return 0;
 		// CoinGecko's keyless tier allows only a few calls a minute.
 		const concurrency = options.concurrency ?? (exchange === "CRYPTO" ? 1 : 3);
