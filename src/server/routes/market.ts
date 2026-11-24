@@ -21,11 +21,11 @@ export function marketRoutes(r: Router, app: App) {
 	const snapshots = new Map<Exchange, { at: number; data: unknown }>();
 	r.get(
 		"/api/public/snapshot",
-		(ctx) => {
+		async (ctx) => {
 			const exchange = exchangeSchema.parse(ctx.query.get("exchange") ?? "NGX");
 			const cached = snapshots.get(exchange);
 			if (cached && Date.now() - cached.at < SNAPSHOT_TTL_MS) return cached.data;
-			const o = marketOverview(app.db, exchange, 5);
+			const o = await marketOverview(app.db, exchange, 5);
 			const slim = (list: typeof o.gainers) =>
 				list.map((q) => ({ symbol: q.symbol, name: q.name, close: q.close, changePct: q.changePct }));
 			const data = {
@@ -78,8 +78,11 @@ export function marketRoutes(r: Router, app: App) {
 	r.get("/api/securities/:exchange/:symbol", async (ctx) => {
 		const exchange = exchangeSchema.parse(ctx.params.exchange);
 		const report = await app.market.report(ctx.params.symbol as string, exchange);
-		const history = app.db.market.history(exchange, report.security.symbol, 730);
-		return { report, history, watched: app.watchlists.has(ctx.user, exchange, report.security.symbol) };
+		const [history, watched] = await Promise.all([
+			app.db.market.history(exchange, report.security.symbol, 730),
+			app.watchlists.has(ctx.user, exchange, report.security.symbol),
+		]);
+		return { report, history, watched };
 	});
 
 	// Latest price plus today's intraday candles where the source has them.
@@ -90,7 +93,7 @@ export function marketRoutes(r: Router, app: App) {
 	);
 
 	// -- Signals: what to look at buying or selling now, with each idea's track record --
-	r.get("/api/signals", ({ query }) => {
+	r.get("/api/signals", async ({ query }) => {
 		const q = z
 			.object({
 				exchange: exchangeSchema.default("NGX"),
@@ -100,8 +103,8 @@ export function marketRoutes(r: Router, app: App) {
 			})
 			.parse(queryObject(query));
 		return {
-			ideas: signalIdeas(app.db, q.exchange, q),
-			market: signalSummary(app.db, q.exchange),
+			ideas: await signalIdeas(app.db, q.exchange, q),
+			market: await signalSummary(app.db, q.exchange),
 			rules: { ...SIGNAL_DEFAULTS, minTrades: MIN_TRADES },
 		};
 	});
@@ -113,8 +116,8 @@ export function marketRoutes(r: Router, app: App) {
 		await app.watchlists.add(ctx.user, b.symbol, b.exchange ? exchangeSchema.parse(b.exchange) : undefined);
 		return app.watchlists.list(ctx.user);
 	});
-	r.delete("/api/watchlist/:exchange/:symbol", (ctx) => {
-		app.watchlists.remove(ctx.user, ctx.params.symbol as string, exchangeSchema.parse(ctx.params.exchange));
+	r.delete("/api/watchlist/:exchange/:symbol", async (ctx) => {
+		await app.watchlists.remove(ctx.user, ctx.params.symbol as string, exchangeSchema.parse(ctx.params.exchange));
 		return app.watchlists.list(ctx.user);
 	});
 
@@ -132,18 +135,18 @@ export function marketRoutes(r: Router, app: App) {
 		await app.portfolio.add(ctx.user, { ...b, exchange: b.exchange ? exchangeSchema.parse(b.exchange) : undefined });
 		return app.portfolio.get(ctx.user);
 	});
-	r.put("/api/portfolio/:id", (ctx) => {
-		app.portfolio.update(ctx.user, Number(ctx.params.id), holdingSchema.parse(ctx.body));
+	r.put("/api/portfolio/:id", async (ctx) => {
+		await app.portfolio.update(ctx.user, Number(ctx.params.id), holdingSchema.parse(ctx.body));
 		return app.portfolio.get(ctx.user);
 	});
-	r.delete("/api/portfolio/:id", (ctx) => {
-		app.portfolio.remove(ctx.user, Number(ctx.params.id));
+	r.delete("/api/portfolio/:id", async (ctx) => {
+		await app.portfolio.remove(ctx.user, Number(ctx.params.id));
 		return app.portfolio.get(ctx.user);
 	});
 
 	// -- Alerts ------------------------------------------------------------------------
 	r.get("/api/alerts", (ctx) => app.alerts.list(ctx.user));
-	r.post("/api/alerts", (ctx) => {
+	r.post("/api/alerts", async (ctx) => {
 		const b = z
 			.object({
 				symbol: z.string().min(1).max(24),
@@ -153,12 +156,12 @@ export function marketRoutes(r: Router, app: App) {
 				note: z.string().max(200).optional(),
 			})
 			.parse(ctx.body);
-		const t = resolveTarget(b.symbol, b.exchange);
+		const t = await resolveTarget(b.symbol, b.exchange);
 		return app.alerts.add(ctx.user, { ...t, condition: b.condition, threshold: b.threshold, note: b.note });
 	});
 	r.post("/api/alerts/:id/rearm", (ctx) => app.alerts.rearm(ctx.user, Number(ctx.params.id)));
-	r.delete("/api/alerts/:id", (ctx) => {
-		if (!app.alerts.remove(ctx.user, Number(ctx.params.id))) throw new NotFoundError("Alert not found");
+	r.delete("/api/alerts/:id", async (ctx) => {
+		if (!(await app.alerts.remove(ctx.user, Number(ctx.params.id)))) throw new NotFoundError("Alert not found");
 		return { removed: Number(ctx.params.id) };
 	});
 }

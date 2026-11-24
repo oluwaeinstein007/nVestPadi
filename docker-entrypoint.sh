@@ -6,6 +6,13 @@
 # disk is wiped on restart (e.g. Render's free plan). Without it, the app runs exactly as before.
 set -eu
 
+# Litestream only replicates SQLite; a PostgreSQL server already persists everything.
+case "${DATABASE_URL:-}${DATABASE_PATH:-}" in
+	postgres://* | postgresql://* | *postgres://* | *postgresql://*)
+		exec "$@"
+		;;
+esac
+
 if [ -z "${LITESTREAM_BUCKET:-}" ]; then
 	exec "$@"
 fi

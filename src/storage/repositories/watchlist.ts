@@ -11,35 +11,43 @@ export interface WatchlistEntry {
 export class WatchlistRepository {
 	constructor(private readonly db: Database) {}
 
-	add(userId: number, exchange: Exchange, symbol: string): boolean {
-		const r = this.db
-			.prepare("INSERT OR IGNORE INTO watchlist (user_id, exchange, symbol) VALUES (?, ?, ?)")
-			.run(userId, exchange, symbol.toUpperCase());
-		return Number(r.changes) > 0;
-	}
-
-	remove(userId: number, exchange: Exchange, symbol: string): boolean {
-		const r = this.db
-			.prepare("DELETE FROM watchlist WHERE user_id = ? AND exchange = ? AND symbol = ?")
-			.run(userId, exchange, symbol.toUpperCase());
-		return Number(r.changes) > 0;
-	}
-
-	has(userId: number, exchange: Exchange, symbol: string): boolean {
-		return Boolean(
-			this.db
-				.prepare("SELECT 1 FROM watchlist WHERE user_id = ? AND exchange = ? AND symbol = ?")
-				.get(userId, exchange, symbol.toUpperCase()),
+	async add(userId: number, exchange: Exchange, symbol: string): Promise<boolean> {
+		const r = await this.db.run(
+			"INSERT INTO watchlist (user_id, exchange, symbol) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+			[userId, exchange, symbol.toUpperCase()],
 		);
+		return r.changes > 0;
 	}
 
-	count(userId: number): number {
-		return (this.db.prepare("SELECT COUNT(*) AS n FROM watchlist WHERE user_id = ?").get(userId) as { n: number }).n;
+	async remove(userId: number, exchange: Exchange, symbol: string): Promise<boolean> {
+		const r = await this.db.run("DELETE FROM watchlist WHERE user_id = ? AND exchange = ? AND symbol = ?", [
+			userId,
+			exchange,
+			symbol.toUpperCase(),
+		]);
+		return r.changes > 0;
 	}
 
-	list(userId: number): WatchlistEntry[] {
-		return this.db
-			.prepare("SELECT exchange, symbol, added_at AS addedAt FROM watchlist WHERE user_id = ? ORDER BY id")
-			.all(userId) as unknown as WatchlistEntry[];
+	async has(userId: number, exchange: Exchange, symbol: string): Promise<boolean> {
+		const row = await this.db.get(
+			"SELECT 1 AS present FROM watchlist WHERE user_id = ? AND exchange = ? AND symbol = ?",
+			[userId, exchange, symbol.toUpperCase()],
+		);
+		return row !== undefined;
+	}
+
+	count(userId: number): Promise<number> {
+		return this.db.count("SELECT COUNT(*) AS n FROM watchlist WHERE user_id = ?", [userId]);
+	}
+
+	async list(userId: number): Promise<WatchlistEntry[]> {
+		const rows = await this.db.all("SELECT exchange, symbol, added_at FROM watchlist WHERE user_id = ? ORDER BY id", [
+			userId,
+		]);
+		return rows.map((r) => ({
+			exchange: r.exchange as Exchange,
+			symbol: String(r.symbol),
+			addedAt: String(r.added_at),
+		}));
 	}
 }

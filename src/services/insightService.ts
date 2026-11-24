@@ -58,7 +58,7 @@ export class InsightService {
 	) {}
 
 	/** Find securities referenced by ticker (e.g. "GTCO", "aapl") or company name. */
-	detectSymbols(question: string, max = 3): { exchange: Exchange; symbol: string }[] {
+	async detectSymbols(question: string, max = 3): Promise<{ exchange: Exchange; symbol: string }[]> {
 		const found = new Map<string, { exchange: Exchange; symbol: string }>();
 		const lower = question.toLowerCase();
 		const tokens = new Set(
@@ -68,7 +68,7 @@ export class InsightService {
 				.filter((t) => t.length >= 2 && (t === t.toUpperCase() || t.length >= 5))
 				.map((t) => t.toUpperCase()),
 		);
-		for (const s of this.db.market.allSymbols()) {
+		for (const s of await this.db.market.allSymbols()) {
 			const shortName = s.name.replace(NAME_SUFFIX, "").toLowerCase();
 			const byTicker = tokens.has(s.symbol);
 			const byName = shortName.length >= 4 && new RegExp(`\\b${escapeRegex(shortName)}\\b`).test(lower);
@@ -82,7 +82,7 @@ export class InsightService {
 		if (!this.ai) throw new FeatureUnavailableError("AI answers", ["AI_PROVIDER + AI_API_KEY"]);
 
 		const context: { title: string; source: string; kind: string; text: string; score?: number }[] = [];
-		const symbols = this.detectSymbols(question);
+		const symbols = await this.detectSymbols(question);
 
 		for (const s of symbols) {
 			try {
@@ -101,7 +101,7 @@ export class InsightService {
 		if (MARKET_WORDS.test(question) || symbols.length === 0) {
 			const exchanges: Exchange[] = options.exchange ? [options.exchange] : [...EXCHANGES];
 			for (const exchange of exchanges) {
-				const o = marketOverview(this.db, exchange, 5);
+				const o = await marketOverview(this.db, exchange, 5);
 				if (o.count === 0) continue;
 				const fmt = (list: typeof o.gainers) =>
 					list.map((q) => `${q.symbol} ${(q.changePct ?? 0) >= 0 ? "+" : ""}${q.changePct}%`).join(", ");
@@ -122,7 +122,7 @@ export class InsightService {
 			const exchanges: Exchange[] = options.exchange ? [options.exchange] : [...EXCHANGES];
 			for (const exchange of exchanges) {
 				for (const side of ["BUY", "SELL"] as const) {
-					const ideas = signalIdeas(this.db, exchange, { side, limit: 8 });
+					const ideas = await signalIdeas(this.db, exchange, { side, limit: 8 });
 					if (ideas.length === 0) continue;
 					const list = ideas
 						.map((i) => {
@@ -135,7 +135,7 @@ export class InsightService {
 							return `${i.symbol} (${i.name}) ${i.call.strength} ${side} at ${i.currency} ${i.close} on ${i.call.date}:${levels}${record}`;
 						})
 						.join("; ");
-					const m = signalSummary(this.db, exchange)[side];
+					const m = (await signalSummary(this.db, exchange))[side];
 					const overall = m.trades
 						? ` Across the market, past ${side} signals worked ${m.winRate}% of ${m.trades} vs ${m.baseRate}% for a random entry.`
 						: "";

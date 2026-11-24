@@ -173,6 +173,22 @@ pnpm nvest ask "How did Nigerian banks trade this week?"
 4. **Check:** `nvest doctor` reports the mode, accounts, email, billing and AI status. In cloud mode a missing email service shows as an error.
 5. **Operate:** `nvest users list | set-plan <email> pro | set-role <email> admin | set-password <email>` for support and comps. `nvest sync` (or `serve --sync-every`) refreshes data and delivers alerts to every account.
 
+### PostgreSQL
+
+nVestPadi runs on SQLite by default and on PostgreSQL when `DATABASE_URL` is set. The same code and tests cover both, so you can start on SQLite and move later, or begin on a managed Postgres (Aiven, Neon, Supabase, RDS…) and never think about disks.
+
+```ini
+DATABASE_URL=postgres://user:password@host:5432/dbname?sslmode=require
+```
+
+- Tables are created automatically on first start, and upgrades run under a database lock, so several instances can boot at once.
+- `sslmode` works as in `psql`: `require` encrypts without checking the certificate (what most managed providers expect); `verify-full` also verifies it, using the provider's CA in `DATABASE_CA_CERT`.
+- Postgres is the right choice when you run more than one instance or can't keep a disk: sign-up races, daily-limit counters, one-time links and alert firing are all atomic across instances.
+- Existing SQLite data isn't migrated automatically; start the Postgres deployment fresh, or ask for a migration script.
+- With Postgres you don't need Litestream, and the Docker entrypoint skips it.
+
+To run the tests against a real Postgres: `TEST_DATABASE_URL=postgres://postgres:pw@localhost:5432/postgres pnpm test` (each test gets its own throwaway schema).
+
 ### Free persistent storage (Litestream)
 
 Hosts like Render's free plan wipe the disk whenever the service sleeps or redeploys. The Docker image includes [Litestream](https://litestream.io): set `LITESTREAM_*` and the container restores the SQLite database from S3-compatible storage on boot, then replicates every change within about a second. No code or database changes are needed, and without these variables nothing changes.
@@ -240,6 +256,8 @@ Every variable is optional, and [`.env.example`](.env.example) documents each on
 | `AI_CHAT_MODEL` / `AI_EMBEDDING_MODEL` / `AI_EMBEDDING_DIMENSIONS` | per provider | Model overrides |
 | `QDRANT_URL` / `QDRANT_API_KEY` / `QDRANT_COLLECTION` | — / — / `nvestpadi` | Vector store for the research library |
 | `DATABASE_PATH` | `data/nvestpadi.db` | SQLite file for prices, accounts, watchlists and alerts |
+| `DATABASE_URL` | — | PostgreSQL connection URL; when set, used instead of SQLite (see [PostgreSQL](#postgresql)) |
+| `DATABASE_CA_CERT` / `DATABASE_POOL_MAX` | — / `5` | CA certificate for `sslmode=verify-full`; connection pool size |
 | `US_SYMBOLS` | top 30 S&P 500 | Tickers for `sync us` |
 | `NODE_ENV` / `LOG_LEVEL` | `development` / `info` | Runtime mode and verbosity |
 

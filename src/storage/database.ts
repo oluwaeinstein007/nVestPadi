@@ -1,14 +1,11 @@
 /**
- * SQLite persistence (Node's built-in `node:sqlite`, no native addon).
- *
- * `Database` owns the connection, migrations and transactions; each domain has
- * its own repository hanging off it (`db.market`, `db.users`, …) so callers
- * share one connection without one giant class.
+ * Persistence entry point. `Database.open` picks the engine from config — SQLite (a local file, the default) or
+ * PostgreSQL (a connection URL) — applies migrations, and exposes one repository per domain (`db.market`,
+ * `db.users`, …) that all share the connection. The repositories contain no engine-specific code.
  */
-import { mkdirSync } from "node:fs";
-import path from "node:path";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { MIGRATIONS } from "./migrations.js";
+import type { DatabaseConfig } from "../config.js";
+import type { Dialect, Param, Row, SqlDriver } from "./driver.js";
+import { PostgresDriver } from "./postgresDriver.js";
 import { AlertRepository } from "./repositories/alerts.js";
 import { HoldingsRepository } from "./repositories/holdings.js";
 import { JobStateRepository } from "./repositories/jobState.js";
@@ -17,97 +14,101 @@ import { MarketRepository } from "./repositories/market.js";
 import { UsageRepository } from "./repositories/usage.js";
 import { UserRepository } from "./repositories/users.js";
 import { WatchlistRepository } from "./repositories/watchlist.js";
+import { SqliteDriver } from "./sqliteDriver.js";
+
+export { isUniqueViolation, timestamp } from "./driver.js";
+export type { Param, Row } from "./driver.js";
 
 export class Database {
-	private readonly conn: DatabaseSync;
-	private readonly statements = new Map<string, StatementSync>();
-	private depth = 0;
+	readonly market = new MarketRepository(this);
+	readonly ledger = new KnowledgeLedger(this);
+	readonly users = new UserRepository(this);
+	readonly watchlist = new WatchlistRepository(this);
+	readonly alerts = new AlertRepository(this);
+	readonly usage = new UsageRepository(this);
+	readonly holdings = new HoldingsRepository(this);
+	readonly jobs = new JobStateRepository(this);
+	private closed = false;
 
-	readonly market: MarketRepository;
-	readonly ledger: KnowledgeLedger;
-	readonly users: UserRepository;
-	readonly watchlist: WatchlistRepository;
-	readonly alerts: AlertRepository;
-	readonly usage: UsageRepository;
-	readonly holdings: HoldingsRepository;
-	readonly jobs: JobStateRepository;
+	private constructor(private readonly driver: SqlDriver) {}
 
-	constructor(file: string) {
-		if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
-		this.conn = new DatabaseSync(file);
-		this.conn.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-		this.migrate();
-		this.market = new MarketRepository(this);
-		this.ledger = new KnowledgeLedger(this);
-		this.users = new UserRepository(this);
-		this.watchlist = new WatchlistRepository(this);
-		this.alerts = new AlertRepository(this);
-		this.usage = new UsageRepository(this);
-		this.holdings = new HoldingsRepository(this);
-		this.jobs = new JobStateRepository(this);
+	/** Connect, migrate and return a ready database. */
+	static async open(target: DatabaseConfig): Promise<Database> {
+		const driver: SqlDriver =
+			target.kind === "postgres"
+				? new PostgresDriver({ url: target.url, caCert: target.caCert, poolMax: target.poolMax })
+				: new SqliteDriver(target.path);
+		try {
+			await driver.migrate();
+		} catch (err) {
+			await driver.close().catch(() => undefined);
+			throw err;
+		}
+		return new Database(driver);
 	}
 
-	private migrate() {
-		const { user_version: current } = this.conn.prepare("PRAGMA user_version").get() as { user_version: number };
-		for (let v = current; v < MIGRATIONS.length; v++) {
-			this.transaction(() => {
-				this.conn.exec(MIGRATIONS[v] as string);
-				this.conn.exec(`PRAGMA user_version = ${v + 1}`);
-			});
-		}
+	/** A throwaway in-memory SQLite database (tests, scratch work). */
+	static memory(): Promise<Database> {
+		return Database.open({ kind: "sqlite", path: ":memory:" });
+	}
+
+	get dialect(): Dialect {
+		return this.driver.dialect;
+	}
+
+	all(sql: string, params?: Param[]): Promise<Row[]> {
+		return this.driver.all(sql, params);
+	}
+
+	get(sql: string, params?: Param[]): Promise<Row | undefined> {
+		return this.driver.get(sql, params);
+	}
+
+	run(sql: string, params?: Param[]): Promise<{ changes: number }> {
+		return this.driver.run(sql, params);
+	}
+
+	/** `SELECT COUNT(*) AS n …` and friends. */
+	async count(sql: string, params?: Param[]): Promise<number> {
+		return Number((await this.driver.get(sql, params))?.n ?? 0);
+	}
+
+	/**
+	 * Run `fn` atomically; queries it makes (however deep) join the transaction, and nested calls join the outer one.
+	 * Throwing rolls everything back.
+	 */
+	transaction<T>(fn: () => Promise<T>): Promise<T> {
+		return this.driver.transaction(fn);
+	}
+
+	/** Inside a transaction: wait until no other transaction holds `key` (e.g. "first account"). */
+	lock(key: string): Promise<void> {
+		return this.driver.lock(key);
 	}
 
 	/** Throws if the database can't be queried (used by the health check). */
-	ping() {
-		this.prepare("SELECT 1").get();
+	async ping(): Promise<void> {
+		await this.driver.get("SELECT 1 AS ok");
 	}
 
-	get schemaVersion(): number {
-		return (this.conn.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+	schemaVersion(): Promise<number> {
+		return this.driver.schemaVersion();
 	}
 
-	/** Prepared statements are cached by SQL text. */
-	prepare(sql: string): StatementSync {
-		let stmt = this.statements.get(sql);
-		if (!stmt) {
-			stmt = this.conn.prepare(sql);
-			this.statements.set(sql, stmt);
-		}
-		return stmt;
+	async stats() {
+		const [securities, prices, indexedChunks, users, last] = await Promise.all([
+			this.count("SELECT COUNT(*) AS n FROM securities"),
+			this.count("SELECT COUNT(*) AS n FROM daily_prices"),
+			this.count("SELECT COUNT(*) AS n FROM indexed_chunks"),
+			this.count("SELECT COUNT(*) AS n FROM users"),
+			this.get("SELECT MAX(date) AS d FROM daily_prices"),
+		]);
+		return { securities, prices, indexedChunks, users, lastPriceDate: (last?.d as string | null | undefined) ?? null };
 	}
 
-	/** Runs `fn` atomically. Nested calls join the outer transaction. */
-	transaction<T>(fn: () => T): T {
-		if (this.depth > 0) return fn();
-		this.conn.exec("BEGIN IMMEDIATE");
-		this.depth++;
-		try {
-			const result = fn();
-			this.conn.exec("COMMIT");
-			return result;
-		} catch (err) {
-			this.conn.exec("ROLLBACK");
-			throw err;
-		} finally {
-			this.depth--;
-		}
-	}
-
-	stats() {
-		const one = (sql: string) => (this.prepare(sql).get() as { n: number }).n;
-		return {
-			securities: one("SELECT COUNT(*) AS n FROM securities"),
-			prices: one("SELECT COUNT(*) AS n FROM daily_prices"),
-			indexedChunks: one("SELECT COUNT(*) AS n FROM indexed_chunks"),
-			users: one("SELECT COUNT(*) AS n FROM users"),
-			lastPriceDate: (this.prepare("SELECT MAX(date) AS d FROM daily_prices").get() as { d: string | null }).d ?? null,
-		};
-	}
-
-	close() {
-		if (this.conn.isOpen) this.conn.close();
+	async close(): Promise<void> {
+		if (this.closed) return;
+		this.closed = true;
+		await this.driver.close();
 	}
 }
-
-/** SQLite datetime modifier for "now + N seconds", e.g. `datetime('now', ?)`. */
-export const inSeconds = (seconds: number) => `+${Math.round(seconds)} seconds`;

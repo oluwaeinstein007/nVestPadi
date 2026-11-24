@@ -55,9 +55,9 @@ export const systemCommands: Record<string, Command> = {
 		async run(app, args, flags, json) {
 			const email = str(flags.user);
 			if (email) {
-				const user = app.db.users.byEmail(normalizeEmail(email));
+				const user = await app.db.users.byEmail(normalizeEmail(email));
 				if (!user) throw new UsageError(`No account for ${email}`);
-				const digest = app.digests.userDigest(user);
+				const digest = await app.digests.userDigest(user);
 				if (!digest) return out(c.dim("Nothing personal to report (empty watchlist, portfolio and alerts)."));
 				if (flags.send) {
 					const results = await app.notifier.deliver(user, digest.paragraphs, { subject: digest.subject });
@@ -75,7 +75,7 @@ export const systemCommands: Record<string, Command> = {
 				return json ? digest : out(`${c.bold(digest.subject)}\n\n${digest.paragraphs.join("\n\n")}`);
 			}
 			const exchange = parseExchange(args[0]) ?? "NGX";
-			const text = app.digests.marketDigest(exchange);
+			const text = await app.digests.marketDigest(exchange);
 			if (!text) return out(c.dim(`No ${exchange} data yet — run \`nvest sync\` first.`));
 			if (flags.send) {
 				const sent = await app.digests.broadcast(text);
@@ -123,9 +123,9 @@ export const systemCommands: Record<string, Command> = {
 		},
 		async run(app, args, flags, json) {
 			const [action = "list", email, value] = args;
-			const find = () => {
+			const find = async () => {
 				if (!email) throw new UsageError(`users ${action} needs an email`);
-				const user = app.db.users.byEmail(normalizeEmail(email));
+				const user = await app.db.users.byEmail(normalizeEmail(email));
 				if (!user) throw new UsageError(`No account for ${email}`);
 				return user;
 			};
@@ -133,7 +133,7 @@ export const systemCommands: Record<string, Command> = {
 			const passwordOrGenerated = () => str(flags.password) ?? randomBytes(12).toString("base64url");
 
 			if (action === "list") {
-				const users = app.db.users.list();
+				const users = await app.db.users.list();
 				if (json) return users.map(({ billingCustomerId, billingSubscriptionId, ...u }) => u);
 				if (users.length === 0) return out(`No accounts yet. Create one with ${c.bold("nvest users create <email>")}.`);
 				return out(
@@ -179,7 +179,7 @@ export const systemCommands: Record<string, Command> = {
 				return;
 			}
 
-			const user = find();
+			const user = await find();
 			if (action === "set-password") {
 				const password = passwordOrGenerated();
 				await app.auth.setPassword(user, password);
@@ -191,17 +191,17 @@ export const systemCommands: Record<string, Command> = {
 			if (action === "set-plan") {
 				if (value !== "free" && value !== "pro") throw new UsageError("Usage: nvest users set-plan <email> free|pro");
 				// Manual grants (e.g. comps, beta testers) don't expire until changed.
-				const updated = app.db.users.update(user.id, { plan: value, planRenewsAt: null });
+				const updated = await app.db.users.update(user.id, { plan: value, planRenewsAt: null });
 				return json ? updated : out(`${c.green("✔")} ${user.email} is now on ${value}`);
 			}
 			if (action === "set-role") {
 				if (value !== "admin" && value !== "member")
 					throw new UsageError("Usage: nvest users set-role <email> admin|member");
-				const updated = app.db.users.update(user.id, { role: value as Role });
+				const updated = await app.db.users.update(user.id, { role: value as Role });
 				return json ? updated : out(`${c.green("✔")} ${user.email} is now ${value}`);
 			}
 			if (action === "delete") {
-				app.db.users.delete(user.id);
+				await app.db.users.delete(user.id);
 				return json ? { deleted: user.email } : out(`${c.green("✔")} Deleted ${user.email} and their data`);
 			}
 			throw new UsageError(`Unknown users action "${action}"`);

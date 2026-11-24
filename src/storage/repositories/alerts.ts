@@ -1,8 +1,7 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { Exchange } from "../../markets/types.js";
-import type { Database } from "../database.js";
-
-type Row = Record<string, SQLInputValue>;
+import type { Database, Row } from "../database.js";
+import { timestamp } from "../driver.js";
+import { num, str } from "../rows.js";
 
 export interface AlertRow {
 	id: number;
@@ -21,79 +20,80 @@ export interface AlertRow {
 export class AlertRepository {
 	constructor(private readonly db: Database) {}
 
-	create(a: {
+	async create(a: {
 		userId: number;
 		exchange: Exchange;
 		symbol: string;
 		condition: string;
 		threshold: number;
 		note?: string;
-	}): AlertRow {
-		const r = this.db
-			.prepare("INSERT INTO alerts (user_id, exchange, symbol, condition, threshold, note) VALUES (?, ?, ?, ?, ?, ?)")
-			.run(a.userId, a.exchange, a.symbol.toUpperCase(), a.condition, a.threshold, a.note ?? null);
-		return this.get(Number(r.lastInsertRowid)) as AlertRow;
+	}): Promise<AlertRow> {
+		const row = await this.db.get(
+			"INSERT INTO alerts (user_id, exchange, symbol, condition, threshold, note) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+			[a.userId, a.exchange, a.symbol.toUpperCase(), a.condition, a.threshold, a.note ?? null],
+		);
+		return (await this.get(Number(row?.id))) as AlertRow;
 	}
 
-	get(id: number): AlertRow | null {
-		const row = this.db.prepare("SELECT * FROM alerts WHERE id = ?").get(id) as Row | undefined;
+	async get(id: number): Promise<AlertRow | null> {
+		const row = await this.db.get("SELECT * FROM alerts WHERE id = ?", [id]);
 		return row ? toAlert(row) : null;
 	}
 
-	listForUser(userId: number, options: { activeOnly?: boolean } = {}): AlertRow[] {
-		const rows = this.db
-			.prepare(
-				`SELECT * FROM alerts WHERE user_id = ? ${options.activeOnly ? "AND triggered_at IS NULL" : ""} ORDER BY id`,
-			)
-			.all(userId) as Row[];
+	async listForUser(userId: number, options: { activeOnly?: boolean } = {}): Promise<AlertRow[]> {
+		const rows = await this.db.all(
+			`SELECT * FROM alerts WHERE user_id = ? ${options.activeOnly ? "AND triggered_at IS NULL" : ""} ORDER BY id`,
+			[userId],
+		);
 		return rows.map(toAlert);
 	}
 
 	/** Every armed alert that belongs to an account. */
-	listActive(): AlertRow[] {
-		return (
-			this.db
-				.prepare("SELECT * FROM alerts WHERE triggered_at IS NULL AND user_id IS NOT NULL ORDER BY id")
-				.all() as Row[]
-		).map(toAlert);
+	async listActive(): Promise<AlertRow[]> {
+		const rows = await this.db.all(
+			"SELECT * FROM alerts WHERE triggered_at IS NULL AND user_id IS NOT NULL ORDER BY id",
+		);
+		return rows.map(toAlert);
 	}
 
-	countActive(userId: number): number {
-		return (
-			this.db.prepare("SELECT COUNT(*) AS n FROM alerts WHERE user_id = ? AND triggered_at IS NULL").get(userId) as {
-				n: number;
-			}
-		).n;
+	countActive(userId: number): Promise<number> {
+		return this.db.count("SELECT COUNT(*) AS n FROM alerts WHERE user_id = ? AND triggered_at IS NULL", [userId]);
 	}
 
-	markTriggered(id: number, value: number) {
-		this.db.prepare("UPDATE alerts SET triggered_at = datetime('now'), trigger_value = ? WHERE id = ?").run(value, id);
+	/** Mark an armed alert as fired. False if it already was — e.g. another instance's check got there first. */
+	async markTriggered(id: number, value: number): Promise<boolean> {
+		const r = await this.db.run(
+			"UPDATE alerts SET triggered_at = ?, trigger_value = ? WHERE id = ? AND triggered_at IS NULL",
+			[timestamp(), value, id],
+		);
+		return r.changes > 0;
 	}
 
 	/** Re-arm a fired alert so it is evaluated again. */
-	rearm(userId: number, id: number): AlertRow | null {
-		const r = this.db
-			.prepare("UPDATE alerts SET triggered_at = NULL, trigger_value = NULL WHERE id = ? AND user_id = ?")
-			.run(id, userId);
-		return Number(r.changes) > 0 ? this.get(id) : null;
+	async rearm(userId: number, id: number): Promise<AlertRow | null> {
+		const r = await this.db.run(
+			"UPDATE alerts SET triggered_at = NULL, trigger_value = NULL WHERE id = ? AND user_id = ?",
+			[id, userId],
+		);
+		return r.changes > 0 ? this.get(id) : null;
 	}
 
-	delete(userId: number, id: number): boolean {
-		return Number(this.db.prepare("DELETE FROM alerts WHERE id = ? AND user_id = ?").run(id, userId).changes) > 0;
+	async delete(userId: number, id: number): Promise<boolean> {
+		return (await this.db.run("DELETE FROM alerts WHERE id = ? AND user_id = ?", [id, userId])).changes > 0;
 	}
 }
 
 function toAlert(r: Row): AlertRow {
 	return {
 		id: Number(r.id),
-		userId: r.user_id === null || r.user_id === undefined ? null : Number(r.user_id),
+		userId: num(r.user_id),
 		exchange: r.exchange as Exchange,
 		symbol: String(r.symbol),
 		condition: String(r.condition),
 		threshold: Number(r.threshold),
-		note: (r.note as string | null) ?? null,
+		note: str(r.note),
 		createdAt: String(r.created_at),
-		triggeredAt: (r.triggered_at as string | null) ?? null,
-		triggerValue: r.trigger_value === null || r.trigger_value === undefined ? null : Number(r.trigger_value),
+		triggeredAt: str(r.triggered_at),
+		triggerValue: num(r.trigger_value),
 	};
 }

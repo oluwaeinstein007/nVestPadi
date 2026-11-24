@@ -3,7 +3,7 @@
  * the HTTP server so both behave identically.
  */
 import { type AIProvider, createAIProvider } from "./ai/provider.js";
-import type { Config } from "./config.js";
+import { type Config, describeDatabase } from "./config.js";
 import { TelegramClient } from "./integrations/telegram.js";
 import { errorMessage, logger } from "./lib/logger.js";
 import { CoinGecko } from "./markets/coingecko.js";
@@ -52,7 +52,7 @@ export interface App {
 		options?: { symbols?: string[]; index?: boolean },
 	): Promise<{ results: SyncResult[]; errors: { exchange: Exchange; error: string }[]; triggered: TriggeredAlert[] }>;
 	doctor(): Promise<HealthCheck[]>;
-	close(): void;
+	close(): Promise<void>;
 }
 
 export interface HealthCheck {
@@ -61,8 +61,8 @@ export interface HealthCheck {
 	detail: string;
 }
 
-export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): App {
-	const db = new Database(config.databasePath);
+export async function createApp(config: Config, overrides: { mailer?: Mailer } = {}): Promise<App> {
+	const db = await Database.open(config.database);
 	const ai = createAIProvider(config.ai);
 	const vectors = config.qdrant ? new VectorStore(config.qdrant) : null;
 	const mailer = overrides.mailer ?? createMailer(config.email);
@@ -122,13 +122,13 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 				}
 			}
 			const triggered = await alerts.check();
-			db.users.purgeExpired();
+			await db.users.purgeExpired();
 			return { results, errors, triggered };
 		},
 
 		async doctor() {
 			const checks: HealthCheck[] = [];
-			const stats = db.stats();
+			const stats = await db.stats();
 			checks.push({
 				name: "Mode",
 				status: "ok",
@@ -137,10 +137,10 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 			checks.push({
 				name: "Database",
 				status: "ok",
-				detail: `${config.databasePath} — schema v${db.schemaVersion}, ${stats.securities} securities, ${stats.prices} price rows${stats.lastPriceDate ? `, latest ${stats.lastPriceDate}` : ""}`,
+				detail: `${describeDatabase(config.database)} — schema v${await db.schemaVersion()}, ${stats.securities} securities, ${stats.prices} price rows${stats.lastPriceDate ? `, latest ${stats.lastPriceDate}` : ""}`,
 			});
 
-			const signup = auth.signupStatus();
+			const signup = await auth.signupStatus();
 			checks.push({
 				name: "Accounts",
 				status: stats.users === 0 ? "warn" : "ok",
@@ -258,7 +258,7 @@ export function createApp(config: Config, overrides: { mailer?: Mailer } = {}): 
 		},
 
 		close() {
-			db.close();
+			return db.close();
 		},
 	};
 	app.bots = new BotService(app);

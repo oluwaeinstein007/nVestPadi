@@ -49,9 +49,9 @@ export class MarketService {
 		private readonly options: { usSymbols: string[]; coingecko: CoinGecko },
 	) {}
 
-	private store(snapshot: MarketSnapshot) {
-		this.db.market.upsertSecurities(snapshot.securities);
-		this.db.market.upsertPrices(snapshot.bars);
+	private async store(snapshot: MarketSnapshot) {
+		await this.db.market.upsertSecurities(snapshot.securities);
+		await this.db.market.upsertPrices(snapshot.bars);
 	}
 
 	/** Fetch the latest session for a market and store it. */
@@ -68,16 +68,17 @@ export class MarketService {
 			snapshot = result;
 			failed = result.failed;
 		}
-		this.store(snapshot);
+		await this.store(snapshot);
 		if (exchange === "US") await this.enrichUsListings();
 
 		const date = snapshot.bars.reduce<string | null>((max, b) => (max === null || b.date > max ? b.date : max), null);
 		let indexed = 0;
 		if (options.index !== false && this.kb.enabled) {
 			try {
-				const latest = this.db.market
-					.latestQuotes(exchange)
-					.filter((q) => q.date === date && snapshot.securities.some((s) => s.symbol === q.symbol));
+				const symbols = new Set(snapshot.securities.map((s) => s.symbol));
+				const latest = (await this.db.market.latestQuotes(exchange)).filter(
+					(q) => q.date === date && symbols.has(q.symbol),
+				);
 				indexed = (await this.kb.indexQuotes(latest)).indexed;
 			} catch (err) {
 				// Market data is already saved; indexing is a bonus that shouldn't fail the sync.
@@ -90,18 +91,13 @@ export class MarketService {
 	/** Sector, industry, market cap and venue for US stocks — refreshed at most once a day. */
 	async enrichUsListings(force = false): Promise<number> {
 		const key = `enrich:US:${isoDate(new Date())}`;
-		if (!force && this.db.jobs.get(key)) return 0;
+		if (!force && (await this.db.jobs.get(key))) return 0;
 		const listings = await fetchUsListings();
 		if (listings.size === 0) return 0;
-		const known = new Set(
-			this.db.market
-				.allSymbols()
-				.filter((s) => s.exchange === "US")
-				.map((s) => s.symbol),
-		);
+		const known = new Set((await this.db.market.allSymbols()).filter((s) => s.exchange === "US").map((s) => s.symbol));
 		const relevant = new Map([...listings].filter(([symbol]) => known.has(symbol)));
-		const updated = this.db.market.enrichSecurities("US", relevant);
-		this.db.jobs.set(key, String(updated));
+		const updated = await this.db.market.enrichSecurities("US", relevant);
+		await this.db.jobs.set(key, String(updated));
 		logger.info("US listings enriched", { updated });
 		return updated;
 	}
@@ -109,16 +105,16 @@ export class MarketService {
 	/** Backfill daily history for one symbol. */
 	async loadHistory(symbol: string, options: { exchange?: Exchange; range?: YahooRange } = {}) {
 		const ticker = symbol.toUpperCase();
-		const candidates = options.exchange ? [options.exchange] : this.candidateExchanges(ticker);
+		const candidates = options.exchange ? [options.exchange] : await this.candidateExchanges(ticker);
 		let unexpected: unknown;
 		for (const exchange of candidates) {
 			try {
 				const snapshot = await this.fetchHistory(exchange, ticker, options.range);
 				if (snapshot.bars.length === 0) continue;
 				// Keep richer names/sectors from the daily sync if we already have them.
-				const known = this.db.market.getSecurity(exchange, ticker);
-				this.store({ securities: known ? [] : snapshot.securities, bars: snapshot.bars });
-				this.db.jobs.set(`history:${exchange}:${ticker}`, isoDate(new Date()));
+				const known = await this.db.market.getSecurity(exchange, ticker);
+				await this.store({ securities: known ? [] : snapshot.securities, bars: snapshot.bars });
+				await this.db.jobs.set(`history:${exchange}:${ticker}`, isoDate(new Date()));
 				return {
 					exchange,
 					symbol: ticker,
@@ -140,7 +136,7 @@ export class MarketService {
 	private async fetchHistory(exchange: Exchange, ticker: string, range?: YahooRange): Promise<MarketSnapshot> {
 		if (exchange === "NGX") return fetchNgxHistory(ticker);
 		if (exchange === "US") return fetchUsHistory(ticker, range ?? "2y");
-		const known = this.db.market.getSecurity("CRYPTO", ticker);
+		const known = await this.db.market.getSecurity("CRYPTO", ticker);
 		const security = known?.sourceId ? known : await this.options.coingecko.search(ticker);
 		if (!security?.sourceId) throw new Error(`Unknown crypto symbol ${ticker}`);
 		const ohlc = await this.cryptoOhlc(ticker);
@@ -155,7 +151,7 @@ export class MarketService {
 	 * its latest close is within 5% of the price CoinGecko gave us for this coin.
 	 */
 	private async cryptoOhlc(ticker: string): Promise<PriceBar[] | null> {
-		const reference = this.db.market.latestQuote("CRYPTO", ticker)?.close;
+		const reference = (await this.db.market.latestQuote("CRYPTO", ticker))?.close;
 		if (!reference) return null;
 		try {
 			const { bars } = await fetchCryptoHistory(ticker, "2y");
@@ -178,17 +174,21 @@ export class MarketService {
 	 */
 	async backfill(exchange: Exchange, options: { limit?: number; concurrency?: number } = {}): Promise<number> {
 		const today = isoDate(new Date());
+		const limit = options.limit ?? 50;
+		const due: string[] = [];
+		for (const symbol of await this.db.market.thinHistory(exchange, MIN_HISTORY)) {
+			if (due.length >= limit) break;
+			if ((await this.db.jobs.get(`history:${exchange}:${symbol}`)) !== today) due.push(symbol);
+		}
 		// Coins backfilled before candles were available get one try at OHLC history.
-		const upgrades =
-			exchange === "CRYPTO"
-				? this.db.market
-						.closeOnlyHistory(exchange, MIN_HISTORY)
-						.filter((symbol) => !this.db.jobs.get(`ohlc:${exchange}:${symbol}`))
-				: [];
-		const due = [...this.db.market.thinHistory(exchange, MIN_HISTORY), ...upgrades]
-			.filter((symbol) => upgrades.includes(symbol) || this.db.jobs.get(`history:${exchange}:${symbol}`) !== today)
-			.slice(0, options.limit ?? 50);
-		for (const symbol of due) if (upgrades.includes(symbol)) this.db.jobs.set(`ohlc:${exchange}:${symbol}`, today);
+		if (exchange === "CRYPTO") {
+			for (const symbol of await this.db.market.closeOnlyHistory(exchange, MIN_HISTORY)) {
+				if (due.length >= limit) break;
+				if (due.includes(symbol) || (await this.db.jobs.get(`ohlc:${exchange}:${symbol}`))) continue;
+				await this.db.jobs.set(`ohlc:${exchange}:${symbol}`, today);
+				due.push(symbol);
+			}
+		}
 		if (due.length === 0) return 0;
 		// CoinGecko's keyless tier allows only a few calls a minute.
 		const concurrency = options.concurrency ?? (exchange === "CRYPTO" ? 1 : 3);
@@ -197,7 +197,7 @@ export class MarketService {
 				await this.loadHistory(symbol, { exchange });
 				return true;
 			} catch (err) {
-				this.db.jobs.set(`history:${exchange}:${symbol}`, today);
+				await this.db.jobs.set(`history:${exchange}:${symbol}`, today);
 				logger.debug("backfill failed", { exchange, symbol, error: errorMessage(err) });
 				return false;
 			}
@@ -208,8 +208,8 @@ export class MarketService {
 	}
 
 	/** Markets to try for a bare ticker: ones we already know it on first, then NGX, US, crypto. */
-	private candidateExchanges(symbol: string): Exchange[] {
-		const known = this.db.market.findExchanges(symbol);
+	private async candidateExchanges(symbol: string): Promise<Exchange[]> {
+		const known = await this.db.market.findExchanges(symbol);
 		return [...known, ...EXCHANGES.filter((e) => !known.includes(e))];
 	}
 
@@ -220,7 +220,7 @@ export class MarketService {
 	async track(symbol: string, exchange?: Exchange): Promise<{ exchange: Exchange; symbol: string }> {
 		let target: { exchange: Exchange; symbol: string };
 		try {
-			target = this.resolve(symbol, exchange);
+			target = await this.resolve(symbol, exchange);
 		} catch {
 			const loaded = await this.loadHistory(symbol, { exchange });
 			target = { exchange: loaded.exchange, symbol: loaded.symbol };
@@ -229,18 +229,21 @@ export class MarketService {
 		return target;
 	}
 
-	resolve(symbol: string, exchange?: Exchange): { exchange: Exchange; symbol: string } {
+	async resolve(symbol: string, exchange?: Exchange): Promise<{ exchange: Exchange; symbol: string }> {
 		const ticker = symbol.toUpperCase();
 		if (exchange) return { exchange, symbol: ticker };
-		const known = this.db.market.findExchanges(ticker);
+		const known = await this.db.market.findExchanges(ticker);
 		if (known.length === 0) throw new SymbolNotFoundError(ticker);
 		return { exchange: known[0] as Exchange, symbol: ticker };
 	}
 
 	/** Fetch deeper history when we hold too little — at most once a day per symbol. */
 	private async ensureHistory(exchange: Exchange, symbol: string): Promise<PriceBar[]> {
-		const bars = this.db.market.history(exchange, symbol);
-		if (bars.length >= MIN_HISTORY || this.db.jobs.get(`history:${exchange}:${symbol}`) === isoDate(new Date())) {
+		const bars = await this.db.market.history(exchange, symbol);
+		if (
+			bars.length >= MIN_HISTORY ||
+			(await this.db.jobs.get(`history:${exchange}:${symbol}`)) === isoDate(new Date())
+		) {
 			return bars;
 		}
 		await this.loadHistory(symbol, { exchange }).catch((err) =>
@@ -253,13 +256,13 @@ export class MarketService {
 	async report(symbol: string, exchange?: Exchange): Promise<SecurityReport> {
 		let target: { exchange: Exchange; symbol: string };
 		try {
-			target = this.resolve(symbol, exchange);
+			target = await this.resolve(symbol, exchange);
 		} catch {
 			const loaded = await this.loadHistory(symbol, { exchange });
 			target = { exchange: loaded.exchange, symbol: loaded.symbol };
 		}
 		const bars = await this.ensureHistory(target.exchange, target.symbol);
-		const security = this.db.market.getSecurity(target.exchange, target.symbol);
+		const security = await this.db.market.getSecurity(target.exchange, target.symbol);
 		if (!security || bars.length === 0) throw new SymbolNotFoundError(target.symbol, target.exchange);
 		return buildReport(security, bars);
 	}

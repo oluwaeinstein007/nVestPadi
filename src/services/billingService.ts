@@ -84,11 +84,11 @@ export class BillingService {
 	}
 
 	/** Apply a verified webhook event. Unknown events are ignored. */
-	handleEvent(event: PaystackEvent): { userId: number; plan: string } | null {
+	async handleEvent(event: PaystackEvent): Promise<{ userId: number; plan: string } | null> {
 		const config = this.require();
 		const d = event.data;
 		const planCode = typeof d.plan === "string" ? d.plan : d.plan?.plan_code;
-		const user = this.findUser(d);
+		const user = await this.findUser(d);
 		if (!user) {
 			logger.warn("billing event for unknown customer", { event: event.event });
 			return null;
@@ -99,7 +99,7 @@ export class BillingService {
 			case "charge.success":
 			case "invoice.update": {
 				if (planCode !== config.planCode) return null; // one-off charges for other products
-				this.db.users.update(user.id, {
+				await this.db.users.update(user.id, {
 					plan: "pro",
 					planRenewsAt: toSql(d.next_payment_date ?? new Date(Date.now() + 31 * 86_400_000).toISOString()),
 					billingCustomerId: d.customer?.customer_code ?? user.billingCustomerId,
@@ -109,20 +109,20 @@ export class BillingService {
 			}
 			// Sent when a cancelled subscription reaches the end of its paid period, or Paystack gives up retrying.
 			case "subscription.disable":
-				this.db.users.update(user.id, { plan: "free", planRenewsAt: null, billingSubscriptionId: null });
+				await this.db.users.update(user.id, { plan: "free", planRenewsAt: null, billingSubscriptionId: null });
 				return { userId: user.id, plan: "free" };
 			default:
 				return null;
 		}
 	}
 
-	private findUser(d: PaystackEvent["data"]): User | null {
+	private async findUser(d: PaystackEvent["data"]): Promise<User | null> {
 		const meta = typeof d.metadata === "object" && d.metadata ? d.metadata : null;
 		return (
-			(meta?.userId ? this.db.users.byId(Number(meta.userId)) : null) ??
-			(d.subscription_code ? this.db.users.bySubscription(d.subscription_code) : null) ??
-			(d.customer?.customer_code ? this.db.users.byBillingCustomer(d.customer.customer_code) : null) ??
-			(d.customer?.email ? this.db.users.byEmail(d.customer.email.toLowerCase()) : null)
+			(meta?.userId ? await this.db.users.byId(Number(meta.userId)) : null) ??
+			(d.subscription_code ? await this.db.users.bySubscription(d.subscription_code) : null) ??
+			(d.customer?.customer_code ? await this.db.users.byBillingCustomer(d.customer.customer_code) : null) ??
+			(d.customer?.email ? await this.db.users.byEmail(d.customer.email.toLowerCase()) : null)
 		);
 	}
 }

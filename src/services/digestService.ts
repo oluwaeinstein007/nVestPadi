@@ -63,8 +63,8 @@ export class DigestService {
 	}
 
 	/** Market wrap in light markup, or null when there's no data. */
-	marketDigest(exchange: Exchange): string | null {
-		const o = marketOverview(this.db, exchange, 5);
+	async marketDigest(exchange: Exchange): Promise<string | null> {
+		const o = await marketOverview(this.db, exchange, 5);
 		if (o.count === 0 || !o.date) return null;
 		const currency = exchange === "NGX" ? "NGN" : "USD";
 		const line = (q: (typeof o.gainers)[number]) => `${q.symbol} ${money(q.close, currency)} (${pct(q.changePct)})`;
@@ -91,11 +91,10 @@ export class DigestService {
 	}
 
 	/** The user's own wrap-up: watchlist moves, portfolio P&L, alerts. Null when there's nothing personal to say. */
-	userDigest(user: User, day = isoDate(new Date())): { subject: string; paragraphs: string[] } | null {
+	async userDigest(user: User, day = isoDate(new Date())): Promise<{ subject: string; paragraphs: string[] } | null> {
 		const paragraphs: string[] = [];
 
-		const watch = this.watchlists
-			.list(user)
+		const watch = (await this.watchlists.list(user))
 			.filter((w) => w.quote)
 			.sort((a, b) => Math.abs(b.quote?.changePct ?? 0) - Math.abs(a.quote?.changePct ?? 0))
 			.slice(0, 12);
@@ -110,7 +109,7 @@ export class DigestService {
 			);
 		}
 
-		const { totals, positions } = this.portfolio.get(user);
+		const { totals, positions } = await this.portfolio.get(user);
 		if (totals.length) {
 			const top = [...positions]
 				.filter((p) => p.dayPnl !== null)
@@ -127,26 +126,25 @@ export class DigestService {
 
 		// Fresh signals on what the user holds (a SELL = consider trimming) or watches.
 		const held = new Set(positions.map((p) => `${p.exchange}:${p.symbol}`));
+		const watched: { side: "BUY" | "SELL"; winRate: number | null; trades: number; symbol: string; held: boolean }[] =
+			[];
+		for (const w of await this.watchlists.list(user)) {
+			if (held.has(`${w.exchange}:${w.symbol}`)) continue;
+			const bars = await this.db.market.history(w.exchange, w.symbol, 730);
+			const call = bars.length >= 60 ? analyzeSignals(bars).call : null;
+			if (call?.date === day) {
+				watched.push({
+					side: call.side,
+					winRate: call.track.winRate,
+					trades: call.track.trades,
+					symbol: w.symbol,
+					held: false,
+				});
+			}
+		}
 		const signalLines = [
 			...positions.filter((p) => p.signal?.date === day).map((p) => ({ ...p.signal, symbol: p.symbol, held: true })),
-			...this.watchlists
-				.list(user)
-				.filter((w) => !held.has(`${w.exchange}:${w.symbol}`))
-				.flatMap((w) => {
-					const bars = this.db.market.history(w.exchange, w.symbol, 730);
-					const call = bars.length >= 60 ? analyzeSignals(bars).call : null;
-					return call?.date === day
-						? [
-								{
-									side: call.side,
-									winRate: call.track.winRate,
-									trades: call.track.trades,
-									symbol: w.symbol,
-									held: false,
-								},
-							]
-						: [];
-				}),
+			...watched,
 		].map((s) => {
 			const record = s.trades ? ` (past ${s.side} signals worked ${s.winRate}% of ${s.trades})` : "";
 			const what = s.held ? (s.side === "SELL" ? " — you hold it; consider trimming" : " — you hold it") : "";
@@ -154,7 +152,7 @@ export class DigestService {
 		});
 		if (signalLines.length) paragraphs.push(`**New signals**\n${signalLines.join("\n")}`);
 
-		const alerts = this.db.alerts.listForUser(user.id);
+		const alerts = await this.db.alerts.listForUser(user.id);
 		const firedToday = alerts.filter((a) => a.triggeredAt?.startsWith(day));
 		const active = alerts.filter((a) => !a.triggeredAt).length;
 		if (firedToday.length || active) {
@@ -164,7 +162,7 @@ export class DigestService {
 		}
 
 		if (paragraphs.length === 0) return null;
-		const o = marketOverview(this.db, user.defaultExchange, 1);
+		const o = await marketOverview(this.db, user.defaultExchange, 1);
 		if (o.date) {
 			paragraphs.unshift(
 				`${MARKET_NAMES[user.defaultExchange]} ${o.date}: ▲ ${o.advancers} ▼ ${o.decliners}${o.gainers[0] ? ` · top gainer ${o.gainers[0].symbol} ${pct(o.gainers[0].changePct)}` : ""}`,
@@ -193,11 +191,11 @@ export class DigestService {
 
 	async sendUserDigests(exchange: Exchange, day: string): Promise<number> {
 		let sent = 0;
-		for (const user of this.db.users.digestRecipients(exchange, day)) {
+		for (const user of await this.db.users.digestRecipients(exchange, day)) {
 			// Claim first so a crash mid-send can't produce duplicates on the next tick.
-			this.db.users.update(user.id, { lastDigestOn: day });
+			await this.db.users.update(user.id, { lastDigestOn: day });
 			if (this.notifier.channelsFor(user).length === 0) continue;
-			const digest = this.userDigest(user, day);
+			const digest = await this.userDigest(user, day);
 			if (!digest) continue;
 			const results = await this.notifier.deliver(user, digest.paragraphs, { subject: digest.subject });
 			if (results.some((r) => r.ok)) sent++;
@@ -222,19 +220,19 @@ export class DigestService {
 			const weekend = now.getUTCDay() === 0 || now.getUTCDay() === 6;
 			if (WEEKDAY_MARKETS.has(exchange) && weekend) continue;
 			const key = `digest:${exchange}:${day}`;
-			if (this.db.jobs.get(key)) continue;
+			if (await this.db.jobs.get(key)) continue;
 
 			await refresh(exchange).catch((err) =>
 				logger.warn(`pre-digest sync failed for ${exchange}`, { error: errorMessage(err) }),
 			);
-			const session = marketOverview(this.db, exchange, 1).date;
+			const session = (await marketOverview(this.db, exchange, 1)).date;
 			if (WEEKDAY_MARKETS.has(exchange) && session !== day) {
 				// Public holiday or data not published: nothing new to report today.
-				this.db.jobs.claim(key, "no-session");
+				await this.db.jobs.claim(key, "no-session");
 				continue;
 			}
-			if (!this.db.jobs.claim(key, "sent")) continue;
-			const text = this.marketDigest(exchange);
+			if (!(await this.db.jobs.claim(key, "sent"))) continue;
+			const text = await this.marketDigest(exchange);
 			const broadcast = text ? await this.broadcast(text) : [];
 			const users = await this.sendUserDigests(exchange, day);
 			logger.info(`${exchange} digest sent`, { broadcast: broadcast.join(",") || "none", users });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 import { signalIdeas, signalSummary } from "../src/analysis/ideas.js";
 import { buildReport } from "../src/analysis/report.js";
 import { analyzeSignals, breakoutStrategy, describeTrack } from "../src/analysis/signals.js";
@@ -10,7 +10,7 @@ import type { PriceBar } from "../src/markets/types.js";
 import { fetchCryptoHistory, fetchIntraday } from "../src/markets/yahoo.js";
 import { AlertService } from "../src/services/alertService.js";
 import type { Notifier } from "../src/services/notifier.js";
-import { makeBars, memoryDb, security, seed, user } from "./helpers.js";
+import { dropTestDatabases, makeBars, memoryDb, security, seed, testEnv, user } from "./helpers.js";
 
 /**
  * 150 sessions of steady gains, 130 of tight sideways trading (no new highs),
@@ -98,22 +98,35 @@ describe("breakout signals", () => {
 });
 
 describe("signal ideas", () => {
-	it("lists securities with a fresh call and summarises the market's record", () => {
-		const db = memoryDb();
-		seed(db, [
+	it("lists securities with a fresh call and summarises the market's record", async () => {
+		const db = await memoryDb();
+		await seed(db, [
 			{ s: security("GTCO", "Guaranty Trust"), closes: breakoutSeries([1.005]) },
 			// Same session dates as GTCO, so both are in the latest session.
 			{ s: security("FLAT", "Flat Co"), closes: Array(breakoutSeries([1.005]).length).fill(10) },
 		]);
-		const ideas = signalIdeas(db, "NGX");
+		const ideas = await signalIdeas(db, "NGX");
 		assert.deepEqual(
 			ideas.map((i) => i.symbol),
 			["GTCO"],
 		);
-		assert.equal(signalIdeas(db, "NGX", { side: "SELL" }).length, 0);
-		const summary = signalSummary(db, "NGX");
+		assert.equal((await signalIdeas(db, "NGX", { side: "SELL" })).length, 0);
+		const summary = await signalSummary(db, "NGX");
 		assert.equal(summary.BUY.symbols, 2);
 		assert.equal(summary.BUY.side, "BUY");
+	});
+});
+
+describe("crypto candle upgrades", () => {
+	it("finds symbols whose stored history is mostly close-only", async () => {
+		const db = await memoryDb();
+		const closes = Array.from({ length: 80 }, (_, i) => 100 + i);
+		await db.market.upsertPrices([
+			...makeBars("OLD", closes, "CRYPTO").map((b) => ({ ...b, high: null, low: null })),
+			...makeBars("NEW", closes, "CRYPTO"),
+		]);
+		assert.deepEqual(await db.market.closeOnlyHistory("CRYPTO", 60), ["OLD"]);
+		await db.close();
 	});
 });
 
@@ -121,17 +134,17 @@ describe("signal alerts", () => {
 	const silent = { deliver: async () => [] } as unknown as Notifier;
 
 	it("fires signal-buy on a fresh BUY and validates the success-rate threshold", async () => {
-		const db = memoryDb();
-		seed(db, [{ s: security("GTCO", "Guaranty Trust"), closes: breakoutSeries([1.005]) }]);
+		const db = await memoryDb();
+		await seed(db, [{ s: security("GTCO", "Guaranty Trust"), closes: breakoutSeries([1.005]) }]);
 		const alerts = new AlertService(db, silent, "self-hosted");
-		const owner = user(db);
-		assert.throws(() =>
+		const owner = await user(db);
+		await assert.rejects(
 			alerts.add(owner, { exchange: "NGX", symbol: "GTCO", condition: "signal-buy", threshold: 150 }),
 		);
-		alerts.add(owner, { exchange: "NGX", symbol: "GTCO", condition: "signal-buy", threshold: 0 });
-		alerts.add(owner, { exchange: "NGX", symbol: "GTCO", condition: "signal-sell", threshold: 0 });
+		await alerts.add(owner, { exchange: "NGX", symbol: "GTCO", condition: "signal-buy", threshold: 0 });
+		await alerts.add(owner, { exchange: "NGX", symbol: "GTCO", condition: "signal-sell", threshold: 0 });
 		// Only one past BUY: a minimum success rate can't be met by so little evidence.
-		alerts.add(owner, { exchange: "NGX", symbol: "GTCO", condition: "signal-buy", threshold: 50 });
+		await alerts.add(owner, { exchange: "NGX", symbol: "GTCO", condition: "signal-buy", threshold: 50 });
 		const fired = await alerts.check();
 		assert.deepEqual(
 			fired.map((f) => f.alert.condition),
@@ -143,21 +156,21 @@ describe("signal alerts", () => {
 
 describe("signals on holdings", () => {
 	it("flags a holding's signal in the portfolio and the personal digest", async () => {
-		const app = createApp(parseConfig({ DATABASE_PATH: ":memory:", NODE_ENV: "test" }));
+		const app = await createApp(parseConfig(await testEnv()));
 		const closes = breakoutSeries([]);
 		const day = new Date().toISOString().slice(0, 10);
 		const start = new Date(Date.now() - (closes.length - 1) * 86_400_000).toISOString().slice(0, 10);
-		app.db.market.upsertSecurities([security("GTCO", "Guaranty Trust")]);
-		app.db.market.upsertPrices(makeBars("GTCO", closes, "NGX", start));
-		const u = user(app.db);
+		await app.db.market.upsertSecurities([security("GTCO", "Guaranty Trust")]);
+		await app.db.market.upsertPrices(makeBars("GTCO", closes, "NGX", start));
+		const u = await user(app.db);
 		await app.portfolio.add(u, { symbol: "GTCO", quantity: 10, avgCost: 100 });
 
-		const position = app.portfolio.get(u).positions[0];
+		const position = (await app.portfolio.get(u)).positions[0];
 		assert.equal(position?.signal?.side, "BUY");
 		assert.equal(position?.signal?.date, day);
-		const body = app.digests.userDigest(u, day)?.paragraphs.join("\n") ?? "";
+		const body = (await app.digests.userDigest(u, day))?.paragraphs.join("\n") ?? "";
 		assert.match(body, /\*\*New signals\*\*\n🟢 BUY GTCO — you hold it/);
-		app.close();
+		await app.close();
 	});
 });
 
@@ -237,3 +250,5 @@ describe("Yahoo parsing", () => {
 		assert.equal(q.candles.length, 1);
 	});
 });
+
+after(dropTestDatabases);

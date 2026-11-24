@@ -4,6 +4,7 @@
 
 No migration; nothing is removed.
 
+- **PostgreSQL is supported** alongside SQLite: set `DATABASE_URL` to use it (see the README). SQLite stays the default.
 - **Signals changed.** The current call (`report.call`) now comes from breakout rules with a trade plan and a measured track record; the old indicator vote is still in `report.signal` but no longer drives anything in the UI, bots or alerts. Expect fewer, different signals.
 - **Live sync is on by default** when `serve --sync-every` is used: each market is re-synced every `LIVE_SYNC_MINUTES` (default `5`) while it's open. That's ~30 Yahoo requests per US sync; set `LIVE_SYNC_MINUTES=0` to keep only the regular sync.
 - **New alert conditions** `signal-buy` and `signal-sell`; the threshold is the minimum past success rate (0 = any signal).

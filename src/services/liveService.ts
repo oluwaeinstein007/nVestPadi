@@ -63,7 +63,7 @@ export class LiveService {
 	}
 
 	private async fetch(exchange: Exchange, symbol: string): Promise<LiveQuote> {
-		const stored = this.db.market.latestQuote(exchange, symbol);
+		const stored = await this.db.market.latestQuote(exchange, symbol);
 		if (!stored) throw new SymbolNotFoundError(symbol, exchange);
 		const base = {
 			exchange,
@@ -116,7 +116,7 @@ export class LiveService {
 		}
 
 		if (exchange === "CRYPTO") {
-			const security = this.db.market.getSecurity("CRYPTO", symbol);
+			const security = await this.db.market.getSecurity("CRYPTO", symbol);
 			if (security?.sourceId) {
 				try {
 					const candles = await this.coingecko.ohlc(security.sourceId, 1);

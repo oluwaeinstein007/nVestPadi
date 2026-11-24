@@ -46,13 +46,14 @@ export interface MarketTrack {
 
 /** Histories shorter than this give too few past signals to say anything. */
 const MIN_BARS = 60;
-const cache = new Map<
-	Exchange,
-	{ key: string; ideas: SignalIdea[]; summary: { BUY: MarketTrack; SELL: MarketTrack } }
->();
+type Scan = { key: string; ideas: SignalIdea[]; summary: { BUY: MarketTrack; SELL: MarketTrack } };
+/** Per database, so separate apps (and tests) never share results. */
+const caches = new WeakMap<Database, Map<Exchange, Scan>>();
 
-function scan(db: Database, exchange: Exchange) {
-	const quotes = db.market.latestQuotes(exchange);
+async function scan(db: Database, exchange: Exchange): Promise<Scan> {
+	const cache = caches.get(db) ?? new Map<Exchange, Scan>();
+	caches.set(db, cache);
+	const quotes = await db.market.latestQuotes(exchange);
 	const date = quotes.reduce<string | null>((max, q) => (max === null || q.date > max ? q.date : max), null);
 	// Mid-session the NGX board lists only stocks that have traded so far today, so take
 	// everything quoted in the last week; a stock that hasn't traded can't have a fresh signal.
@@ -65,7 +66,7 @@ function scan(db: Database, exchange: Exchange) {
 	const ideas: SignalIdea[] = [];
 	const tracks: Record<Side, TrackRecord[]> = { BUY: [], SELL: [] };
 	for (const q of current) {
-		const bars = db.market.history(q.exchange, q.symbol, 730);
+		const bars = await db.market.history(q.exchange, q.symbol, 730);
 		if (bars.length < MIN_BARS) continue;
 		const a = analyzeSignals(bars);
 		tracks.BUY.push(a.track.BUY);
@@ -81,19 +82,22 @@ function scan(db: Database, exchange: Exchange) {
 	return result;
 }
 
-export function signalIdeas(
+export async function signalIdeas(
 	db: Database,
 	exchange: Exchange,
 	options: { side?: Side; limit?: number; minWinRate?: number } = {},
-): SignalIdea[] {
-	return scan(db, exchange)
-		.ideas.filter((i) => !options.side || i.call.side === options.side)
+): Promise<SignalIdea[]> {
+	return (await scan(db, exchange)).ideas
+		.filter((i) => !options.side || i.call.side === options.side)
 		.filter((i) => options.minWinRate === undefined || (i.call.track.winRate ?? 0) >= options.minWinRate)
 		.slice(0, options.limit ?? 50);
 }
 
-export function signalSummary(db: Database, exchange: Exchange): { BUY: MarketTrack; SELL: MarketTrack } {
-	return scan(db, exchange).summary;
+export async function signalSummary(
+	db: Database,
+	exchange: Exchange,
+): Promise<{ BUY: MarketTrack; SELL: MarketTrack }> {
+	return (await scan(db, exchange)).summary;
 }
 
 function toIdea(q: Quote, call: SignalCall): SignalIdea {
