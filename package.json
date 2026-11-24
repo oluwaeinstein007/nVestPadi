@@ -11,7 +11,10 @@
 	"bin": {
 		"nvest": "dist/cli/index.js"
 	},
-	"files": ["dist", "public"],
+	"files": [
+		"dist",
+		"public"
+	],
 	"scripts": {
 		"nvest": "tsx --disable-warning=ExperimentalWarning src/cli/index.ts",
 		"dev": "tsx watch --disable-warning=ExperimentalWarning src/cli/index.ts serve",
@@ -26,16 +29,21 @@
 	"dependencies": {
 		"@qdrant/js-client-rest": "^1.16.2",
 		"cheerio": "^1.1.2",
+		"pg": "^8",
 		"unpdf": "^2.2.1",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
 		"@types/node": "^25.0.3",
+		"@types/pg": "^8",
 		"tsx": "^4.21.0",
 		"typescript": "^5.9.3"
 	},
 	"pnpm": {
-		"onlyBuiltDependencies": ["@biomejs/biome", "esbuild"]
+		"onlyBuiltDependencies": [
+			"@biomejs/biome",
+			"esbuild"
+		]
 	}
 }
