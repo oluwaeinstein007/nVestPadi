@@ -10,20 +10,22 @@ export const portfolioCommands: Record<string, Command> = {
 		summary: "Track the stocks you care about",
 		options: { ...exchangeFlag, ...userFlag },
 		async run(app, args, flags, json) {
-			const user = cliUser(app, flags);
+			const user = await cliUser(app, flags);
 			const [action = "list", ...symbols] = args;
 			const exchange = parseExchange(str(flags.exchange));
 			if (action === "add" || action === "remove") {
 				if (symbols.length === 0) throw new UsageError(`watchlist ${action} needs at least one SYMBOL`);
 				for (const s of symbols) {
 					const t =
-						action === "add" ? await app.watchlists.add(user, s, exchange) : app.watchlists.remove(user, s, exchange);
+						action === "add"
+							? await app.watchlists.add(user, s, exchange)
+							: await app.watchlists.remove(user, s, exchange);
 					if (!json) out(`${c.green("✔")} ${action === "add" ? "Added" : "Removed"} ${t.exchange}:${t.symbol}`);
 				}
-				return json ? app.db.watchlist.list(user.id) : undefined;
+				return json ? await app.db.watchlist.list(user.id) : undefined;
 			}
 			if (action !== "list") throw new UsageError(`Unknown watchlist action "${action}"`);
-			const rows = app.watchlists.list(user);
+			const rows = await app.watchlists.list(user);
 			if (json) return rows;
 			if (rows.length === 0)
 				return out(`Your watchlist is empty. Add one with ${c.bold("nvest watchlist add DANGCEM")}.`);
@@ -55,7 +57,7 @@ export const portfolioCommands: Record<string, Command> = {
 				for (const t of triggered) out(t.message);
 				return;
 			}
-			const user = cliUser(app, flags);
+			const user = await cliUser(app, flags);
 			if (action === "add") {
 				const [symbol, condition, value] = rest;
 				if (!symbol || !condition || value === undefined)
@@ -64,8 +66,8 @@ export const portfolioCommands: Record<string, Command> = {
 					throw new UsageError(
 						`Unknown condition "${condition}". Use one of: ${Object.keys(ALERT_CONDITIONS).join(", ")}`,
 					);
-				const t = app.market.resolve(symbol, parseExchange(str(flags.exchange)));
-				const alert = app.alerts.add(user, { ...t, condition, threshold: Number(value), note: str(flags.note) });
+				const t = await app.market.resolve(symbol, parseExchange(str(flags.exchange)));
+				const alert = await app.alerts.add(user, { ...t, condition, threshold: Number(value), note: str(flags.note) });
 				if (json) return alert;
 				out(`${c.green("✔")} Alert #${alert.id}: ${t.exchange}:${t.symbol} — ${ALERT_CONDITIONS[condition]} ${value}`);
 				if (app.notifier.channelsFor(user).length === 0)
@@ -75,14 +77,14 @@ export const portfolioCommands: Record<string, Command> = {
 			if (action === "remove" || action === "rearm") {
 				const id = Number(rest[0]);
 				if (action === "rearm") {
-					const alert = app.alerts.rearm(user, id);
+					const alert = await app.alerts.rearm(user, id);
 					return json ? alert : out(`${c.green("✔")} Re-armed alert #${id}`);
 				}
-				if (!app.alerts.remove(user, id)) throw new UsageError(`No alert with id ${rest[0]}`);
+				if (!(await app.alerts.remove(user, id))) throw new UsageError(`No alert with id ${rest[0]}`);
 				return json ? { removed: id } : out(`${c.green("✔")} Removed alert #${id}`);
 			}
 			if (action !== "list") throw new UsageError(`Unknown alerts action "${action}"`);
-			const list = app.alerts.list(user, !flags.all);
+			const list = await app.alerts.list(user, !flags.all);
 			if (json) return list;
 			if (list.length === 0)
 				return out(

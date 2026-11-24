@@ -81,14 +81,14 @@ async function main() {
 
 	const config = loadConfig();
 	configureLogger({ level: values.verbose ? "debug" : config.logLevel });
-	const app = createApp(config);
+	const app = await createApp(config);
 	onShutdown(() => app.close());
 
 	try {
 		const result = await cmd.run(app, positionals, values as Flags, Boolean(values.json));
 		if (values.json && result !== undefined) out(JSON.stringify(result, null, 2));
 	} finally {
-		app.close();
+		await app.close();
 	}
 }
 
