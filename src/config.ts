@@ -274,6 +274,13 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 		.filter(([key]) => cleaned[key])
 		.map(([key, instead]) => `${key} is no longer used — ${instead}.`);
 
+	// `.invalid` never resolves, so every emailed link (verify, reset) would be dead. staging.env ships one as a placeholder.
+	if (env.APP_URL && /^https?:\/\/[^/]*\.invalid(?::\d+)?(\/|$)/i.test(env.APP_URL)) {
+		warnings.push(
+			`APP_URL (${env.APP_URL}) is a placeholder host — emailed links (verify email, password reset) will not open. Set it to this deployment's real public URL and redeploy.`,
+		);
+	}
+
 	// DATABASE_URL wins. A PostgreSQL URL in DATABASE_PATH is an easy mistake, so honour it and say what to change.
 	let postgresUrl = env.DATABASE_URL;
 	if (!postgresUrl && isPostgresUrl(env.DATABASE_PATH)) {

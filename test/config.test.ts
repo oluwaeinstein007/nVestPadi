@@ -79,6 +79,11 @@ describe("config", () => {
 		assert.deepEqual(parseConfig({ DATABASE_PATH: ":memory:" }).database, { kind: "sqlite", path: ":memory:" });
 	});
 
+	it("warns when APP_URL is a placeholder .invalid host", () => {
+		assert.match(parseConfig({ APP_URL: "https://nvestpadi-staging.invalid" }).warnings[0] ?? "", /placeholder host/);
+		assert.equal(parseConfig({ APP_URL: "https://app.example.com" }).warnings.length, 0);
+	});
+
 	it("selects PostgreSQL from DATABASE_URL and never leaks the password", () => {
 		const c = parseConfig({ DATABASE_URL: "postgres://app:s3cret@db.example.com:5432/nvp?sslmode=require" });
 		assert.equal(c.database.kind, "postgres");
