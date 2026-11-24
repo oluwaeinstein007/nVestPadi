@@ -140,6 +140,8 @@ const EnvSchema = z
 				"must be a PostgreSQL URL (postgres://user:password@host:5432/dbname); for SQLite use DATABASE_PATH",
 			)
 			.optional(),
+		/** For hosts that hand out the URL and the password separately. Only used when the URL has no password. */
+		DATABASE_PASSWORD: z.string().optional(),
 		DATABASE_CA_CERT: z.string().optional(),
 		DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).default(5),
 
@@ -279,6 +281,17 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 		warnings.push(
 			"DATABASE_PATH holds a PostgreSQL URL — move it to DATABASE_URL (DATABASE_PATH is for SQLite files).",
 		);
+	}
+	if (postgresUrl && env.DATABASE_PASSWORD) {
+		try {
+			const parsed = new URL(postgresUrl);
+			if (!parsed.password) {
+				parsed.password = env.DATABASE_PASSWORD;
+				postgresUrl = parsed.toString();
+			}
+		} catch {
+			// An unparseable URL is reported by the driver.
+		}
 	}
 	const database: DatabaseConfig = postgresUrl
 		? {
