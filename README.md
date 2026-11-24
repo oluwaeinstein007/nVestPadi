@@ -169,7 +169,7 @@ pnpm nvest ask "How did Nigerian banks trade this week?"
    ```
 
 2. **Paystack:** create the monthly plan, then set the webhook URL to `https://app.yourdomain.com/api/billing/webhook`. The webhook is the source of truth for plan changes. It's verified with the HMAC-SHA512 signature, upgrades on `subscription.create` / `charge.success`, and downgrades on `subscription.disable`.
-3. **Deploy:** [`render.yaml`](render.yaml) is a ready Render blueprint (Docker + a 1 GB disk for SQLite). Any Docker host works: mount `/data`, expose port 3000, put HTTPS in front. No persistent disk (e.g. Render's free plan)? Use [free persistent storage](#free-persistent-storage-litestream) instead.
+3. **Deploy:** any Docker host works: set `DATABASE_URL` for a managed Postgres (or mount `/data` for SQLite), expose port 3000 and put HTTPS in front.
 4. **Check:** `nvest doctor` reports the mode, accounts, email, billing and AI status. In cloud mode a missing email service shows as an error.
 5. **Operate:** `nvest users list | set-plan <email> pro | set-role <email> admin | set-password <email>` for support and comps. `nvest sync` (or `serve --sync-every`) refreshes data and delivers alerts to every account.
 
@@ -185,29 +185,8 @@ DATABASE_URL=postgres://user:password@host:5432/dbname?sslmode=require
 - `sslmode` works as in `psql`: `require` encrypts without checking the certificate (what most managed providers expect); `verify-full` also verifies it, using the provider's CA in `DATABASE_CA_CERT`.
 - Postgres is the right choice when you run more than one instance or can't keep a disk: sign-up races, daily-limit counters, one-time links and alert firing are all atomic across instances.
 - Existing SQLite data isn't migrated automatically; start the Postgres deployment fresh, or ask for a migration script.
-- With Postgres you don't need Litestream, and the Docker entrypoint skips it.
 
 To run the tests against a real Postgres: `TEST_DATABASE_URL=postgres://postgres:pw@localhost:5432/postgres pnpm test` (each test gets its own throwaway schema).
-
-### Free persistent storage (Litestream)
-
-Hosts like Render's free plan wipe the disk whenever the service sleeps or redeploys. The Docker image includes [Litestream](https://litestream.io): set `LITESTREAM_*` and the container restores the SQLite database from S3-compatible storage on boot, then replicates every change within about a second. No code or database changes are needed, and without these variables nothing changes.
-
-With **Backblaze B2** (10 GB free):
-
-1. **Buckets → Create a Bucket** (private), e.g. `nvestpadi-db`. Note its endpoint, e.g. `s3.us-west-004.backblazeb2.com`.
-2. **Application Keys → Add a New Application Key**, restricted to that bucket with read and write access. Copy the `keyID` and `applicationKey` (it's shown only once).
-3. Add these to your host's environment (on Render: the service's **Environment** tab):
-
-   ```ini
-   LITESTREAM_BUCKET=nvestpadi-db
-   LITESTREAM_ENDPOINT=https://s3.us-west-004.backblazeb2.com
-   LITESTREAM_REGION=us-west-004
-   LITESTREAM_ACCESS_KEY_ID=<keyID>
-   LITESTREAM_SECRET_ACCESS_KEY=<applicationKey>
-   ```
-
-**Cloudflare R2** works the same way: create an R2 API token with read and write access, use `https://<account-id>.r2.cloudflarestorage.com` as the endpoint and `auto` as the region. If the credentials are wrong, the container refuses to start rather than running with an empty database.
 
 ## CLI
 
