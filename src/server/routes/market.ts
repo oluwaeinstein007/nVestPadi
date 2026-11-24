@@ -1,12 +1,13 @@
 /** Market data, screener, security detail, watchlist and alerts. */
 import { z } from "zod";
-import { signalIdeas, signalSummary } from "../../analysis/ideas.js";
+import { costsFor, roundTripPct } from "../../analysis/costs.js";
+import { callConfidence, signalIdeas, signalSummary } from "../../analysis/ideas.js";
 import { SCREEN_SORTS, marketOverview, screen } from "../../analysis/market.js";
 import { MIN_TRADES, SIGNAL_DEFAULTS } from "../../analysis/signals.js";
 import type { App } from "../../app.js";
 import { NotFoundError } from "../../lib/errors.js";
 import { rateLimiter } from "../../lib/rateLimit.js";
-import type { Exchange } from "../../markets/types.js";
+import { EXCHANGES, type Exchange } from "../../markets/types.js";
 import { ALERT_CONDITIONS } from "../../services/alertService.js";
 import type { Router } from "../router.js";
 import { exchangeSchema, optionalNumber, queryObject } from "./shared.js";
@@ -39,6 +40,34 @@ export function marketRoutes(r: Router, app: App) {
 				losers: slim(o.losers),
 			};
 			snapshots.set(exchange, { at: Date.now(), data });
+			return data;
+		},
+		{ access: "public", limit: rateLimiter(60, 60_000) },
+	);
+
+	// -- Public live track record: every logged signal and how it played out ---------------
+	const records = new Map<string, { at: number; data: unknown }>();
+	r.get(
+		"/api/public/track-record",
+		async (ctx) => {
+			const ex = ctx.query.get("exchange");
+			const exchange = ex ? exchangeSchema.parse(ex) : undefined;
+			const key = exchange ?? "all";
+			const cached = records.get(key);
+			if (cached && Date.now() - cached.at < SNAPSHOT_TTL_MS) return cached.data;
+			const report = await app.ledger.report({ exchange, recent: 200 });
+			const data = {
+				...report,
+				// Levels of signals still in play stay in the app; finished ones are shown in full.
+				recent: report.recent.map((s) =>
+					s.status === "closed" ? s : { ...s, stop: null, target: null, refPrice: null },
+				),
+				costs: Object.fromEntries(
+					EXCHANGES.map((e) => [e, { ...costsFor(e), roundTripPct: Number(roundTripPct(costsFor(e)).toFixed(2)) }]),
+				),
+				rules: { ...SIGNAL_DEFAULTS, minTrades: MIN_TRADES },
+			};
+			records.set(key, { at: Date.now(), data });
 			return data;
 		},
 		{ access: "public", limit: rateLimiter(60, 60_000) },
@@ -78,11 +107,12 @@ export function marketRoutes(r: Router, app: App) {
 	r.get("/api/securities/:exchange/:symbol", async (ctx) => {
 		const exchange = exchangeSchema.parse(ctx.params.exchange);
 		const report = await app.market.report(ctx.params.symbol as string, exchange);
-		const [history, watched] = await Promise.all([
+		const [history, watched, confidence] = await Promise.all([
 			app.db.market.history(exchange, report.security.symbol, 730),
 			app.watchlists.has(ctx.user, exchange, report.security.symbol),
+			report.call ? callConfidence(app.db, exchange, report.call) : null,
 		]);
-		return { report, history, watched };
+		return { report, history, watched, confidence };
 	});
 
 	// Latest price plus today's intraday candles where the source has them.
@@ -105,7 +135,11 @@ export function marketRoutes(r: Router, app: App) {
 		return {
 			ideas: await signalIdeas(app.db, q.exchange, q),
 			market: await signalSummary(app.db, q.exchange),
-			rules: { ...SIGNAL_DEFAULTS, minTrades: MIN_TRADES },
+			rules: {
+				...SIGNAL_DEFAULTS,
+				minTrades: MIN_TRADES,
+				costPct: Number(roundTripPct(costsFor(q.exchange)).toFixed(2)),
+			},
 		};
 	});
 

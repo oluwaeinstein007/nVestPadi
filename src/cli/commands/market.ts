@@ -1,4 +1,4 @@
-/** Market data commands: sync, history, quote, analyze, market, screen. */
+/** Market data commands: sync, history, quote, analyze, signals, record, market, screen. */
 import { signalIdeas, signalSummary } from "../../analysis/ideas.js";
 import { SCREEN_SORTS, type ScreenSort, marketOverview, screen } from "../../analysis/market.js";
 import { parseExchange } from "../../markets/types.js";
@@ -49,6 +49,9 @@ export const marketCommands: Record<string, Command> = {
 			}
 			for (const e of result.errors) out(`${c.red("✘")} ${c.bold(e.exchange)}  ${e.error}`);
 			for (const t of result.triggered) out(`${c.yellow("🔔")} ${t.message}`);
+			for (const u of result.ledger)
+				if (u.logged || u.closed)
+					out(c.dim(`  ${u.exchange} track record: ${u.logged} new signals logged, ${u.closed} scored`));
 			if (!app.kb.enabled && result.results.length)
 				out(c.dim("  Tip: configure AI_PROVIDER + QDRANT_URL to make synced data searchable with `nvest ask`."));
 			if (result.errors.length && !result.results.length) process.exitCode = 1;
@@ -206,7 +209,7 @@ export const marketCommands: Record<string, Command> = {
 					unclear: c.yellow("not clearly better than chance"),
 				}[m.verdict];
 				out(
-					`  Across ${m.symbols} securities, past ${side} signals worked ${m.winRate}% of ${m.trades} vs ${m.baseRate}% for a random ${side === "BUY" ? "entry" : "exit"} — ${verdict}.`,
+					`  Across ${m.symbols} securities, past ${side} signals made money after costs ${m.winRate}% of ${m.trades} times (${m.grossWinRate}% before) vs ${m.baseRate}% for a random ${side === "BUY" ? "entry" : "exit"} — ${verdict}.`,
 				);
 			}
 			if (shown.length === 0) {
@@ -226,16 +229,79 @@ export const marketCommands: Record<string, Command> = {
 					{ header: side === "BUY" ? "Stop" : "Wrong above", value: (i) => price(i.call.plan?.stop), align: "right" },
 					{ header: side === "BUY" ? "Target" : "Down to", value: (i) => price(i.call.plan?.target), align: "right" },
 					{
-						header: "Success",
-						value: (i) => (i.call.track.trades ? `${i.call.track.winRate}% of ${i.call.track.trades}` : "—"),
+						header: "Chance",
+						value: (i) => `${i.confidence.probability}% ${c.dim(`${i.confidence.low}–${i.confidence.high}`)}`,
 						align: "right",
+					},
+					{
+						header: "Past",
+						value: (i) => (i.call.track.trades ? `${i.call.track.wins}/${i.call.track.trades}` : "—"),
+						align: "right",
+					},
+					{
+						header: "Confidence",
+						value: (i) => ({ high: c.green, medium: c.yellow, low: c.red })[i.confidence.level](i.confidence.level),
 					},
 					{ header: "Evidence", value: (i) => (i.evidence === "backed" ? c.green(i.evidence) : c.yellow(i.evidence)) },
 				]),
 			);
 			if (!flags.all && ideas.length > shown.length)
 				out(c.dim(`\n  ${ideas.length - shown.length} more with a thin or poor record: --all`));
-			out(c.dim("\n  Success = past signals on that security replayed with the same plan, before fees. Not advice."));
+			out(
+				c.dim(
+					"\n  Chance = estimated odds of a profit after trading costs (90% range), from this security's past signals,\n  the market's and live results. Live record: nvest record. Not advice.",
+				),
+			);
+		},
+	},
+	record: {
+		usage: "record [--exchange NGX|US|CRYPTO] [--recent 15]",
+		summary: "Live track record: every signal shown since launch and how it played out after costs",
+		options: { ...exchangeFlag, recent: { type: "string" } },
+		async run(app, _args, flags, json) {
+			const exchange = parseExchange(str(flags.exchange)) ?? "NGX";
+			const r = await app.ledger.report({ exchange, recent: num(flags.recent, "recent") ?? 15 });
+			if (json) return r;
+			out(heading(`${exchange} live track record`, r.since ? `since ${r.since.slice(0, 10)}` : "nothing logged yet"));
+			const mine = r.exchanges.find((e) => e.exchange === exchange);
+			for (const side of ["BUY", "SELL"] as const) {
+				const t = mine?.[side];
+				if (!t?.signals) {
+					out(`  ${side}: no signals logged yet`);
+					continue;
+				}
+				const result = t.trades
+					? `${t.wins}/${t.trades} made money after costs (${t.winRate}%, avg ${pct(t.avgNetReturnPct)}; ${t.grossWinRate}% before costs) vs ${t.baseRate ?? "—"}% random — ${t.verdict}`
+					: "none finished yet";
+				out(`  ${c.bold(side)}: ${t.signals} logged, ${t.open} open · ${result}`);
+			}
+			const cal = r.calibration;
+			if (cal.brier !== null) {
+				out(
+					`\n  Stated chance vs outcome (all markets) · Brier ${cal.brier} vs ${cal.baselineBrier ?? "—"} for the random rate`,
+				);
+				for (const b of cal.buckets.filter((x) => x.trades))
+					out(
+						`    ${b.label.padEnd(12)} ${String(b.trades).padStart(4)} signals · said ${b.predicted}% · got ${b.actual}%`,
+					);
+			}
+			if (r.recent.length) {
+				out("");
+				out(
+					table(r.recent, [
+						{
+							header: "Signal",
+							value: (s) => `${s.side === "BUY" ? c.green(s.side) : c.red(s.side)} ${c.bold(s.symbol)}`,
+						},
+						{ header: "Fired", value: (s) => s.signalDate },
+						{ header: "Chance", value: (s) => (s.probability === null ? "—" : `${s.probability}%`), align: "right" },
+						{ header: "Entry", value: (s) => price(s.entryPrice), align: "right" },
+						{ header: "Last/exit", value: (s) => price(s.exitPrice ?? s.lastPrice), align: "right" },
+						{ header: "Net", value: (s) => pct(s.netReturnPct), align: "right" },
+						{ header: "Status", value: (s) => (s.status === "closed" ? (s.exitReason ?? "") : s.status) },
+					]),
+				);
+			}
 		},
 	},
 	market: {

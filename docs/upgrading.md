@@ -1,5 +1,14 @@
 # Upgrading
 
+## v3.2 → v3.3 (live track record, success after costs, confidence)
+
+Migrates automatically (SQLite schema 4, PostgreSQL 2: adds the `signal_log` table); nothing is removed.
+
+- **Success rates are now after trading costs.** `track.winRate`, `avgReturnPct`, `baseRate` and the market-wide figures are net of `TRADING_COSTS` (NGX default ≈3.3% round trip); the old gross figures are in `grossWinRate` / `grossAvgReturnPct`. Expect lower numbers, especially on NGX. `signal-buy`/`signal-sell` alert thresholds compare against the net rate.
+- **Signal ideas carry `confidence`** (estimated chance of profit, 90% range, high/medium/low); `/api/securities/:exchange/:symbol` returns it for the current call. Ideas are ranked by it within each evidence tier.
+- **Every signal is logged** after each sync and scored as it plays out. See `/track-record`, `nvest record` and the `/record` bot command. The ledger starts empty: the first results arrive about 20 sessions after you upgrade.
+- **New optional variable:** `TRADING_COSTS` (e.g. `NGX=1.48/1.8,US=0.25/0.25,CRYPTO=0.5/0.5`).
+
 ## v3.1 → v3.2 (candles, live prices, signals with success rates)
 
 No migration; nothing is removed.

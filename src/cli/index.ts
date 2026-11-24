@@ -43,7 +43,8 @@ ${c.bold("Examples:")}
   nvest sync                         ${c.dim("# today's NGX + US prices")}
   nvest market                       ${c.dim("# NGX breadth, movers, sectors")}
   nvest analyze DANGCEM              ${c.dim("# technical report")}
-  nvest signals --side buy           ${c.dim("# buy signals with stop, target and success rate")}
+  nvest signals --side buy           ${c.dim("# buy signals with stop, target and chance of profit")}
+  nvest record                       ${c.dim("# live track record of every signal shown")}
   nvest screen --sector bank --sort active
   nvest alerts add GTCO above 100
   nvest ingest file ./reports/zenith-2025-annual.pdf

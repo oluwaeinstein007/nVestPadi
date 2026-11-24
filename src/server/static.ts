@@ -38,6 +38,7 @@ const PAGES: Record<string, { file: string; guard?: Guard }> = {
 	"/welcome": { file: "welcome.html", guard: "user" },
 	"/app": { file: "app.html", guard: "onboarded" },
 	"/app/settings": { file: "settings.html", guard: "user" },
+	"/track-record": { file: "track-record.html" },
 	"/terms": { file: "terms.html" },
 	"/privacy": { file: "privacy.html" },
 };

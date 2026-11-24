@@ -162,4 +162,49 @@ export const SQLITE_MIGRATIONS: string[] = [
 		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	`,
+
+	// 4 — v3.3: the live track record. Every signal the app shows is logged the first time it's seen and scored once
+	// it plays out. Entry is the session after the one it was seen in and closed rows are never edited, so nothing can
+	// be filled in with hindsight.
+	`
+	CREATE TABLE signal_log (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		exchange       TEXT NOT NULL,
+		symbol         TEXT NOT NULL,
+		side           TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
+		rule           TEXT NOT NULL,
+		strength       TEXT NOT NULL,
+		reason         TEXT NOT NULL,
+		evidence       TEXT NOT NULL,
+		signal_date    TEXT NOT NULL,
+		seen_date      TEXT NOT NULL,
+		logged_at      TEXT NOT NULL DEFAULT (datetime('now')),
+		ref_price      REAL NOT NULL,
+		stop           REAL NOT NULL,
+		target         REAL NOT NULL,
+		horizon        INTEGER NOT NULL,
+		cost_pct       REAL NOT NULL,
+		probability    REAL,
+		prob_low       REAL,
+		prob_high      REAL,
+		confidence     TEXT,
+		base_rate      REAL,
+		past_trades    INTEGER NOT NULL,
+		past_win_rate  REAL,
+		status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'open', 'closed')),
+		entry_date     TEXT,
+		entry_price    REAL,
+		exit_date      TEXT,
+		exit_price     REAL,
+		exit_reason    TEXT,
+		last_date      TEXT,
+		last_price     REAL,
+		return_pct     REAL,
+		net_return_pct REAL,
+		sessions       INTEGER,
+		UNIQUE (exchange, symbol, side, rule, signal_date)
+	);
+	CREATE INDEX idx_signal_log_status ON signal_log (status, exchange);
+	CREATE INDEX idx_signal_log_logged ON signal_log (logged_at);
+	`,
 ];

@@ -9,6 +9,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { type CostTable, parseCosts } from "./analysis/costs.js";
 
 export type AIProviderName = "openai" | "gemini";
 
@@ -79,6 +80,8 @@ export interface Config {
 	/** While a market is open, re-sync it this often (minutes); 0 = only the regular sync. */
 	liveSyncMinutes: number;
 	coingeckoApiKey: string | null;
+	/** Trading costs (buy/sell % per market) that success rates are measured after. */
+	costs: CostTable;
 	/** Non-fatal problems, e.g. variables from older versions that are now ignored. */
 	warnings: string[];
 }
@@ -187,6 +190,8 @@ const EnvSchema = z
 		DAILY_DIGEST: bool.default("true"),
 		LIVE_SYNC_MINUTES: z.coerce.number().int().min(0).max(240).default(5),
 		COINGECKO_API_KEY: z.string().optional(),
+		/** Buy/sell trading costs in %, e.g. "NGX=1.48/1.8,US=0.25/0.25" (see analysis/costs.ts). */
+		TRADING_COSTS: z.string().optional(),
 	})
 	.superRefine((env, ctx) => {
 		if (env.AI_PROVIDER && !env.AI_API_KEY) {
@@ -353,6 +358,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 		digests: env.DAILY_DIGEST,
 		liveSyncMinutes: env.LIVE_SYNC_MINUTES,
 		coingeckoApiKey: env.COINGECKO_API_KEY ?? null,
+		costs: parseCosts(env.TRADING_COSTS),
 		warnings,
 	};
 }

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<title>Live track record · nVestPadi</title>
+		<link rel="canonical" href="/track-record" />
+		<meta
+			name="description"
+			content="Every buy and sell signal nVestPadi has shown, logged the moment it appeared and scored after trading costs, with how often its stated chances came true."
+		/>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/landing.css" />
+		<script type="module" src="/js/track-record.js"></script>
+	</head>
+	<body>
+		<header class="nav scrolled">
+			<div class="container nav-inner">
+				<a class="brand" href="/"><img src="/favicon.svg" alt="" width="28" height="28" /><span>nVest<strong>Padi</strong></span></a>
+				<div class="nav-actions">
+					<button id="theme" class="icon-btn" type="button" aria-label="Toggle colour theme">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" /></svg>
+					</button>
+					<a class="btn btn-primary btn-sm" href="/app">Open app</a>
+				</div>
+			</div>
+		</header>
+		<main class="container record">
+			<h1>Live track record</h1>
+			<p class="lead">
+				Every signal the app shows is logged the moment it first appears, then scored as it plays out, after trading costs. Nothing is
+				back-filled or removed, including signals that faded before the close.
+			</p>
+			<p class="muted small" id="since"></p>
+
+			<div class="record-tabs" role="tablist" aria-label="Market">
+				<button type="button" role="tab" data-exchange="NGX" aria-selected="true">NGX</button>
+				<button type="button" role="tab" data-exchange="US" aria-selected="false">US stocks</button>
+				<button type="button" role="tab" data-exchange="CRYPTO" aria-selected="false">Crypto</button>
+			</div>
+
+			<section class="record-stats" id="stats" aria-live="polite"></section>
+
+			<h2>Did the stated chances come true?</h2>
+			<p class="muted">
+				Each signal is shown with an estimated chance of making money after costs. If the estimates are honest, signals rated around 60%
+				should succeed about 60% of the time.
+			</p>
+			<div class="record-table-wrap"><table class="record-table" id="calibration"></table></div>
+			<p class="muted small" id="brier"></p>
+
+			<h2>Every signal</h2>
+			<div class="record-table-wrap"><table class="record-table" id="signals"></table></div>
+
+			<h2>How it's measured</h2>
+			<ul class="record-how" id="how"></ul>
+			<p class="muted small">Past results don't guarantee future ones. Educational information, not investment advice.</p>
+		</main>
+	</body>
+</html>

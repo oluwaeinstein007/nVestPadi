@@ -159,4 +159,47 @@ export const POSTGRES_MIGRATIONS: string[] = [
 		updated_at TEXT NOT NULL DEFAULT (${NOW})
 	);
 	`,
+
+	// 2 — v3.3: the live signal ledger (SQLite migration 4)
+	`
+	CREATE TABLE signal_log (
+		id             INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+		exchange       TEXT NOT NULL,
+		symbol         TEXT NOT NULL,
+		side           TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
+		rule           TEXT NOT NULL,
+		strength       TEXT NOT NULL,
+		reason         TEXT NOT NULL,
+		evidence       TEXT NOT NULL,
+		signal_date    TEXT NOT NULL,
+		seen_date      TEXT NOT NULL,
+		logged_at      TEXT NOT NULL DEFAULT (${NOW}),
+		ref_price      DOUBLE PRECISION NOT NULL,
+		stop           DOUBLE PRECISION NOT NULL,
+		target         DOUBLE PRECISION NOT NULL,
+		horizon        INTEGER NOT NULL,
+		cost_pct       DOUBLE PRECISION NOT NULL,
+		probability    DOUBLE PRECISION,
+		prob_low       DOUBLE PRECISION,
+		prob_high      DOUBLE PRECISION,
+		confidence     TEXT,
+		base_rate      DOUBLE PRECISION,
+		past_trades    INTEGER NOT NULL,
+		past_win_rate  DOUBLE PRECISION,
+		status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'open', 'closed')),
+		entry_date     TEXT,
+		entry_price    DOUBLE PRECISION,
+		exit_date      TEXT,
+		exit_price     DOUBLE PRECISION,
+		exit_reason    TEXT,
+		last_date      TEXT,
+		last_price     DOUBLE PRECISION,
+		return_pct     DOUBLE PRECISION,
+		net_return_pct DOUBLE PRECISION,
+		sessions       INTEGER,
+		UNIQUE (exchange, symbol, side, rule, signal_date)
+	);
+	CREATE INDEX idx_signal_log_status ON signal_log (status, exchange);
+	CREATE INDEX idx_signal_log_logged ON signal_log (logged_at);
+	`,
 ];

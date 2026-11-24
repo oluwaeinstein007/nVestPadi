@@ -129,7 +129,7 @@ export class AlertService {
 					: ` Wrong above ${p.stop}; downside objective ${p.target}.`
 				: "";
 			const record = call?.track.trades
-				? ` Past ${call.side} signals: ${call.track.wins}/${call.track.trades} worked (${value}%).`
+				? ` Past ${call.side} signals: ${call.track.wins}/${call.track.trades} made money after costs (${value}%).`
 				: "";
 			return `📈 ${alert.exchange}:${alert.symbol} — ${call?.strength ?? ""} ${call?.side ?? alert.condition.slice(7).toUpperCase()} signal${quote ? ` at ${quote.currency} ${quote.close} (${quote.date})` : ""}.${call ? ` ${call.reason}.` : ""}${levels}${record}${alert.note ? `\n${alert.note}` : ""}`;
 		}

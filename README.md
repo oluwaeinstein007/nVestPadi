@@ -79,7 +79,7 @@ Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps th
 |---|---|
 | 📊 **Market breadth** | Advancers vs decliners, value traded, top gainers and losers, the most traded stocks, and every sector ranked by its move |
 | 📈 **Technical reports** | Trend, RSI, MACD, SMA 20/50/200, Bollinger Bands, ATR, volatility, 52-week range and 1W–1Y performance |
-| 🎯 **Buy & sell signals** | Fresh breakout signals per market with entry, stop, target and time frame, each with its own **success rate** (past signals on that stock replayed with the same rules) next to a random-entry baseline; evidence-backed ideas first. SELL flags on portfolio holdings, signal alerts, and grounding for "what should I buy?" questions. See [how signals are chosen and scored](#how-signals-are-chosen-and-scored) |
+| 🎯 **Buy & sell signals** | Fresh breakout signals per market with entry, stop, target and time frame, each with its own **success rate after trading costs** (past signals on that stock replayed with the same rules) next to a random-entry baseline, and an **estimated chance of profit with a confidence level**; evidence-backed ideas first. Every signal shown is logged to a public **[live track record](#live-track-record)**. SELL flags on portfolio holdings, signal alerts, and grounding for "what should I buy?" questions. See [how signals are chosen and scored](#how-signals-are-chosen-and-scored) |
 | 🔎 **Screener** | Filter by sector, name, price and RSI (e.g. *oversold banks*); sort by gainers, losers, value, volume or RSI |
 | 🌍 **Three markets** | NGX (~150 equities), US stocks with NYSE/Nasdaq venue, sector, industry and market cap, and the top 100 crypto coins |
 | ⭐ **Watchlist** | Per-user NGX, US and crypto symbols side by side, with sparklines |
@@ -87,7 +87,7 @@ Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps th
 | 🟩 **Heatmap & charts** | Most-traded names sized by value and coloured by move; candlestick or line chart with 1D (5-minute) to 2Y ranges, SMA overlays, volume and past-signal markers |
 | ⚡ **Live prices** | While a market is open, `serve` re-syncs it every `LIVE_SYNC_MINUTES` (default 5), and the stock view polls a near-live price for US stocks and crypto. NGX is delayed (no free intraday feed) |
 | 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`, `signal-buy`, `signal-sell` (threshold = minimum past success rate); one digest per user per sync; re-arm after firing |
-| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/signals`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
+| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/signals`, `/record`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
 | 📰 **Daily digests** | Market wrap-ups to a Telegram channel and Discord webhook; personal digests built only from each user's own data |
 | 💬 **Ask AI** | Answers grounded in live reports, market breadth and the research library, with numbered citations |
 | 📄 **Research library** | Annual-report PDFs, HTML, CSV, JSON, Markdown, or whole websites (robots.txt-aware), added by the operator with `nvest ingest` |
@@ -199,7 +199,8 @@ To run the tests against a real Postgres: `TEST_DATABASE_URL=postgres://postgres
 | `quote <SYM...>` | Latest stored quotes |
 | `analyze <SYM>` | Full technical report |
 | `market` | Breadth, movers, sectors. `--exchange NGX\|US\|CRYPTO` `--top N` |
-| `signals` | Fresh buy/sell signals with stop, target and success rate; evidence-backed first. `--exchange` `--side BUY\|SELL` `--all` |
+| `signals` | Fresh buy/sell signals with stop, target, chance of profit and past record; evidence-backed first. `--exchange` `--side BUY\|SELL` `--all` |
+| `record` | Live track record: every logged signal, how it played out after costs, and whether the stated chances came true. `--exchange` `--recent 15` |
 | `screen` | Screener. `--sector` `--search` `--sort` `--min-price` `--max-price` `--rsi-below` `--rsi-above` `--limit` |
 | `watchlist [list\|add\|remove]` | A user's watchlist (`--user email`, default: the owner) |
 | `alerts [list\|add\|remove\|rearm\|check]` | e.g. `alerts add GTCO above 130 --note "breakout"` (`--user email`) |
@@ -232,6 +233,7 @@ Every variable is optional, and [`.env.example`](.env.example) documents each on
 | `DAILY_DIGEST` | `true` | Market and personal digests while `serve` runs |
 | `LIVE_SYNC_MINUTES` | `5` | While a market is open, re-sync it this often (needs `serve --sync-every`); `0` turns it off |
 | `COINGECKO_API_KEY` | — | Optional free demo key for higher crypto rate limits |
+| `TRADING_COSTS` | `NGX=1.48/1.8,US=0.25/0.25,CRYPTO=0.5/0.5` | Buy/sell costs in % that success rates are measured after. NGX default = 1% brokerage + SEC/NGX/CSCS fees, VAT and stamp duty; set your broker's rate |
 | `AI_PROVIDER` / `AI_API_KEY` | — | `openai` or `gemini`; enables Ask, search and ingest |
 | `AI_CHAT_MODEL` / `AI_EMBEDDING_MODEL` / `AI_EMBEDDING_DIMENSIONS` | per provider | Model overrides |
 | `QDRANT_URL` / `QDRANT_API_KEY` / `QDRANT_COLLECTION` | — / — / `nvestpadi` | Vector store for the research library |
@@ -255,6 +257,7 @@ curl -H "Authorization: Bearer nvp_…" https://app.yourdomain.com/api/watchlist
 |---|---|---|---|
 | GET | `/api/health` | public | Liveness |
 | GET | `/api/public/snapshot?exchange=NGX` | public | Cached breadth + top movers (landing page) |
+| GET | `/api/public/track-record?exchange=NGX` | public | Live record of logged signals, calibration of stated chances, recent signals (levels of open ones withheld) |
 | GET | `/api/auth/session` | public | Current user (or null), mode, sign-up status, plans |
 | POST | `/api/auth/signup` · `login` · `logout` | public | `{name, email, password, acceptTerms}` · `{email, password}` |
 | POST | `/api/auth/forgot-password` · `reset-password` · `verify-email` | public | Email-link flows (always 200 for unknown emails) |
@@ -312,8 +315,15 @@ SQLite is the source of truth for prices, accounts and user data. Qdrant only st
 
 - **Rules:** a BUY is a close at a new 50-session high while above the 200-day average (a breakout in an uptrend); a SELL is a new 50-session low below it. Strong = volume ≥ 1.5× its 20-day average. Only signals from the last 3 sessions are "current". Code: [`src/analysis/signals.ts`](src/analysis/signals.ts).
 - **Plan:** entry at the latest price, stop 2× ATR away (at least 2%), target 3× ATR, about 20 sessions to work.
-- **Success rate:** every past signal on that security is replayed with the same plan: enter at the next open, exit at the stop, target, an opposite signal or after 20 sessions. Gaps through a stop fill at the open; close-only history is checked on the close. Returns are before fees. Fewer than 5 past signals is flagged as too few.
+- **Success rate:** every past signal on that security is replayed with the same plan: enter at the next open, exit at the stop, target, an opposite signal or after 20 sessions. Gaps through a stop fill at the open; close-only history is checked on the close. A success is a **profit after trading costs** (`TRADING_COSTS`, ≈3.3% round trip on NGX), and the random-entry baseline has to clear the same costs; gross figures are kept alongside. Fewer than 5 past signals is flagged as too few.
+- **Chance of profit and confidence:** one stock rarely has more than a few past signals, so its own record is blended with the rule's record across the market (worth 10 trades) and with live results ([`src/analysis/confidence.ts`](src/analysis/confidence.ts)). The result is an estimated chance with a 90% range. Confidence is **high** when the whole range is above a random entry, **medium** when the estimate is above it but the range overlaps, **low** otherwise.
+- **Self-correcting, not self-tuning:** as logged signals finish, live outcomes feed the market-wide starting point (after 50 live results they weigh as much as the backtest), so the stated chances drift toward what is actually happening. The rules themselves are not re-fitted automatically: tuning on a few dozen live trades fits noise. Change them only after a fresh out-of-sample test; a new rule set gets a new `SIGNAL_RULE` id and starts a fresh live record.
 - **Why these rules:** four rule sets were replayed on ~10 years of 24 large NGX stocks, 17 US stocks and 10 coins, chosen on data before Nov 2023 and checked on the three years after. Only NGX breakout BUYs beat a random entry in both periods (≈58–61% of trades profitable vs ≈47–49%). The previous indicator vote did no better than chance anywhere, and US, crypto and SELL signals showed no reliable edge with any rule set. Breakouts on thinly traded NGX small caps also do poorly. That's why each idea carries its own record, the market-wide record is shown next to a random entry, and only evidence-backed ideas are listed by default.
+
+### Live track record
+
+Every signal the app shows is written to `signal_log` the first time a sync sees it, with the stop, target and stated chance as shown ([`src/services/signalLedger.ts`](src/services/signalLedger.ts)). It's scored from the open of the session *after* the one it was seen in, with the backtest's exits and the configured costs, and frozen once closed. Signals that fade before the close stay in. The public page `/track-record`, `nvest record` and `/record` show the results per market, plus a calibration table (did "60%" signals succeed ~60% of the time?) and a Brier score against always quoting the random-entry rate.
+
 - These are unofficial public endpoints and may change without notice. A commercial deployment should license its market data.
 
 > **Disclaimer:** nVestPadi is a research and education tool. Nothing it produces is investment advice. The bundled [Terms](public/terms.html) and [Privacy Policy](public/privacy.html) are a starting point; have them reviewed before you operate a hosted service.

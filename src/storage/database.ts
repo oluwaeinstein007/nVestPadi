@@ -11,6 +11,7 @@ import { HoldingsRepository } from "./repositories/holdings.js";
 import { JobStateRepository } from "./repositories/jobState.js";
 import { KnowledgeLedger } from "./repositories/knowledge.js";
 import { MarketRepository } from "./repositories/market.js";
+import { SignalLogRepository } from "./repositories/signalLog.js";
 import { UsageRepository } from "./repositories/usage.js";
 import { UserRepository } from "./repositories/users.js";
 import { WatchlistRepository } from "./repositories/watchlist.js";
@@ -28,6 +29,7 @@ export class Database {
 	readonly usage = new UsageRepository(this);
 	readonly holdings = new HoldingsRepository(this);
 	readonly jobs = new JobStateRepository(this);
+	readonly signals = new SignalLogRepository(this);
 	private closed = false;
 
 	private constructor(private readonly driver: SqlDriver) {}

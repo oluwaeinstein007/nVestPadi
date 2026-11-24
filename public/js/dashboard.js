@@ -229,8 +229,26 @@ function successBadge(track, minTrades) {
 	const thin = track.trades < minTrades;
 	const beats = track.baseRate != null && track.winRate > track.baseRate;
 	const cls = thin ? "thin" : beats ? "good" : "weak";
-	const title = `${track.wins} of ${track.trades} past ${track.side} signals ${track.side === "BUY" ? "made money" : "saw the price fall"}${track.baseRate == null ? "" : `; a random ${track.side === "BUY" ? "entry" : "exit"} worked ${track.baseRate}% of the time`}${thin ? ". Too few signals to rely on." : ""}`;
+	const title = `${track.wins} of ${track.trades} past ${track.side} signals ${track.side === "BUY" ? "made money" : "saw the price fall"} after costs${track.baseRate == null ? "" : `; a random ${track.side === "BUY" ? "entry" : "exit"} worked ${track.baseRate}% of the time`}${thin ? ". Too few signals to rely on." : ""}`;
 	return `<span class="rate ${cls}" title="${esc(title)}">${track.winRate}% <small>of ${track.trades}</small></span>`;
+}
+
+/** "62% chance" coloured by confidence: green = likely beats a random entry, amber = maybe, red = no evidence it does. */
+function confidenceBadge(c) {
+	if (!c) return "";
+	const cls = { high: "good", medium: "thin", low: "weak" }[c.level];
+	const title = `Estimated ${c.probability}% chance of a profit after trading costs (90% range ${c.low}–${c.high}%; a random entry: ${c.baseRate ?? "—"}%). ${c.level[0].toUpperCase()}${c.level.slice(1)} confidence, from ${c.basis.own} past signals on this one, ${c.basis.market} across the market and ${c.basis.live} live results.`;
+	return `<span class="rate ${cls}" title="${esc(title)}">${c.probability}% <small>${c.level}</small></span>`;
+}
+
+function confidenceSentence(c) {
+	if (!c) return "";
+	const level = {
+		high: "the whole range is above a random entry",
+		medium: "above a random entry, but the range overlaps it",
+		low: "no better than a random entry on the evidence so far",
+	}[c.level];
+	return `Estimated chance of a profit after costs: ${c.probability}% (likely between ${c.low}% and ${c.high}%; a random entry: ${c.baseRate ?? "—"}%). ${c.level[0].toUpperCase()}${c.level.slice(1)} confidence: ${level}.`;
 }
 
 function planText(plan, cur) {
@@ -255,15 +273,17 @@ function planText(plan, cur) {
 function trackSentence(t) {
 	if (!t || t.trades === 0) return `No completed ${t?.side ?? ""} signals in this history yet.`;
 	const verb = t.side === "BUY" ? "made money" : "were followed by a fall";
-	return `${t.wins} of ${t.trades} past ${t.side} signals ${verb} (avg ${signed(t.avgReturnPct)} over ~${Math.round(t.avgSessions)} sessions; ${[t.avgWinPct == null ? "" : `wins ${signed(t.avgWinPct)}`, t.avgLossPct == null ? "" : `losses ${signed(t.avgLossPct)}`].filter(Boolean).join(", ")}). A random ${t.side === "BUY" ? "entry" : "exit"} worked ${t.baseRate ?? "—"}% of the time.`;
+	return `${t.wins} of ${t.trades} past ${t.side} signals ${verb} after costs (avg ${signed(t.avgReturnPct)}, ${signed(t.grossAvgReturnPct)} before costs, over ~${Math.round(t.avgSessions)} sessions; ${[t.avgWinPct == null ? "" : `wins ${signed(t.avgWinPct)}`, t.avgLossPct == null ? "" : `losses ${signed(t.avgLossPct)}`].filter(Boolean).join(", ")}). A random ${t.side === "BUY" ? "entry" : "exit"} worked ${t.baseRate ?? "—"}% of the time.`;
 }
 
-function signalSection(r, cur) {
+function signalSection(r, cur, confidence) {
 	const rules = r.rules;
+	const cost = r.call?.track.costPct ?? r.track.BUY.costPct;
 	const how = `<details class="how"><summary>How signals and success rates work</summary>
 		<p>A BUY fires when the price closes at a new 50-session high while above its 200-day average (a breakout in an uptrend); a SELL when it closes at a new 50-session low below that average. It's strong when volume is 1.5× its 20-day average. Signals from the last 3 sessions are shown.</p>
 		<p>We tested several rule sets on about 10 years of prices. This one beat a random entry on NGX stocks in both older and recent years; on US stocks, crypto and for SELL signals no rule set showed a reliable edge, so judge each one by its own record below.</p>
-		<p>The success rate replays every past signal of the same kind on this ${r.security.exchange === "CRYPTO" ? "coin" : "stock"} with the same rules: buy at the next session's open, exit at the stop (${rules.stopAtr}× ATR), the target (${rules.targetAtr}× ATR), an opposite signal, or after ${rules.horizon} sessions. It's before brokerage fees, and past results don't guarantee future ones. Fewer than ${rules.minTrades} past signals is too few to rely on.</p>
+		<p>The success rate replays every past signal of the same kind on this ${r.security.exchange === "CRYPTO" ? "coin" : "stock"} with the same rules: buy at the next session's open, exit at the stop (${rules.stopAtr}× ATR), the target (${rules.targetAtr}× ATR), an opposite signal, or after ${rules.horizon} sessions. A success means a profit after an estimated ${cost}% round trip in trading costs${r.security.exchange === "NGX" ? " (brokerage, SEC, NGX and CSCS fees, VAT and stamp duty)" : ""}. Fewer than ${rules.minTrades} past signals is too few to rely on.</p>
+		<p>The chance of profit blends this ${r.security.exchange === "CRYPTO" ? "coin" : "stock"}'s own record with the rule's record across the market and live results, so one lucky past signal doesn't read as a sure thing. Every signal shown is logged and scored: see the <a href="/track-record?market=${r.security.exchange.toLowerCase()}" target="_blank" rel="noopener">live track record</a>. Past results don't guarantee future ones.</p>
 	</details>`;
 	if (!r.call) {
 		return `<div class="call none">
@@ -278,10 +298,12 @@ function signalSection(r, cur) {
 			<span class="signal ${c.side}">${c.strength.toUpperCase()} ${c.side}</span>
 			<span class="muted small">signal on ${esc(c.date)}</span>
 			<span class="grow"></span>
-			<span class="muted small">Success rate</span> ${successBadge(c.track, rules.minTrades)}
+			<span class="muted small">Chance of profit</span> ${confidenceBadge(confidence)}
+			<span class="muted small">Past record</span> ${successBadge(c.track, rules.minTrades)}
 		</div>
 		<p class="small">${esc(c.reason)}</p>
 		${planText(c.plan, cur)}
+		<p class="small">${esc(confidenceSentence(confidence))}</p>
 		<p class="small muted">${esc(trackSentence(c.track))}</p>
 		${how}
 	</div>`;
@@ -304,7 +326,7 @@ function liveLabel(q) {
 	return { cls: "closed", text: "Market closed", title: `Showing the last close · ${q.session}` };
 }
 
-function renderSecurity({ report: r, history, watched }) {
+function renderSecurity({ report: r, history, watched, confidence }) {
 	const s = r.security;
 	const i = r.indicators;
 	const cur = s.currency === "NGN" ? "₦" : s.currency === "USD" ? "$" : `${s.currency} `;
@@ -353,7 +375,7 @@ function renderSecurity({ report: r, history, watched }) {
 		<div class="legend" id="legend"></div>
 		<div class="perf">${perf}</div>
 		<h3>Signal</h3>
-		${signalSection(r, cur)}
+		${signalSection(r, cur, confidence)}
 		<h3>Indicators</h3>
 		<div class="indicators">
 			${ind("Trend", esc(r.trend), "From 20/50-day moving averages")}
@@ -530,7 +552,7 @@ async function loadSignals() {
 		return `<li><button type="button" data-open="${esc(i.exchange)}:${esc(i.symbol)}" title="${esc(i.call.reason)}">
 			<span class="sym"><span><b>${esc(i.symbol)}</b><span class="signal ${side} small">${i.call.strength}</span></span><span class="name">${esc(i.name)}</span></span>
 			<span class="lv"><span>${cur}${fmtPrice(i.close)} ${chg(i.changePct)}</span><span class="muted small">${levels}</span></span>
-			${successBadge(i.call.track, rules.minTrades)}
+			${confidenceBadge(i.confidence)}
 		</button></li>`;
 	};
 	const word = side === "BUY" ? "buy" : "sell";
@@ -554,7 +576,7 @@ async function loadSignals() {
 		loadSignals().catch(toastError);
 	});
 	const note = ideas.length
-		? `Badge = share of past ${side} signals on that ${isCrypto() ? "coin" : "stock"} that ${side === "BUY" ? "made money" : "were followed by a fall"} (within ${rules.horizon} sessions, before fees). Past results, not a forecast.`
+		? `Badge = estimated chance the signal ${side === "BUY" ? "makes money" : "is followed by a fall"} within ${rules.horizon} sessions after ~${rules.costPct}% trading costs, and how confident that estimate is. Based on past results, not a forecast. <a href="/track-record?market=${state.exchange.toLowerCase()}" target="_blank" rel="noopener">Live track record</a>.`
 		: "";
 	$("#signals-note").innerHTML = [marketRecord(market[side]), note].filter(Boolean).join(" ");
 }
@@ -569,7 +591,7 @@ function marketRecord(m) {
 		worse: `<b class="down">worse than ${random}</b>, so treat these as ideas to research, not recommendations.`,
 		unclear: `<b class="down">not clearly better than ${random}</b>, so treat these as ideas to research, not recommendations.`,
 	}[m.verdict];
-	return `Across ${m.symbols} ${isCrypto() ? "coins" : "stocks"} here, ${m.trades} past ${m.side} signals ${what} ${m.winRate}% of the time: ${verdict}`;
+	return `Across ${m.symbols} ${isCrypto() ? "coins" : "stocks"} here, ${m.trades} past ${m.side} signals ${what} after costs ${m.winRate}% of the time (${m.grossWinRate}% before costs): ${verdict}`;
 }
 
 // ---------------------------------------------------------------------------

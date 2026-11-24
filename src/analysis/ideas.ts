@@ -5,12 +5,14 @@
  * done across the whole market, next to a random entry.
  *
  * Scanning a market replays a few hundred histories, so results are cached
- * until the session's prices change (i.e. until the next sync).
+ * until the session's prices change (i.e. until the next sync) or a logged
+ * signal is scored (which moves the confidence estimates).
  */
 import { isoDate, round } from "../lib/util.js";
 import type { Exchange, Quote } from "../markets/types.js";
 import type { Database } from "../storage/database.js";
-import { MIN_TRADES, type Side, type SignalCall, type TrackRecord, analyzeSignals } from "./signals.js";
+import { type Confidence, type WinCount, estimateConfidence } from "./confidence.js";
+import { MIN_TRADES, SIGNAL_RULE, type Side, type SignalCall, type TrackRecord, analyzeSignals } from "./signals.js";
 
 export interface SignalIdea {
 	exchange: Exchange;
@@ -29,6 +31,8 @@ export interface SignalIdea {
 	 * thin: too few past signals to judge. weak: enough, but no better than random.
 	 */
 	evidence: "backed" | "thin" | "weak";
+	/** Estimated chance of profit after costs, from this security's record, the market's and live results. */
+	confidence: Confidence;
 }
 
 /** The signal rules' record across every security in a market. */
@@ -37,9 +41,13 @@ export interface MarketTrack {
 	symbols: number;
 	trades: number;
 	wins: number;
+	/** Profitable after costs. */
 	winRate: number | null;
 	avgReturnPct: number | null;
-	/** Share of random entries (any session) that moved the signal's way. */
+	grossWinRate: number | null;
+	grossAvgReturnPct: number | null;
+	costPct: number | null;
+	/** Share of random entries (any session) that moved the signal's way by more than costs. */
 	baseRate: number | null;
 	baseAvgPct: number | null;
 	/**
@@ -64,11 +72,12 @@ async function scan(db: Database, exchange: Exchange): Promise<Scan> {
 	// everything quoted in the last week; a stock that hasn't traded can't have a fresh signal.
 	const since = date ? isoDate(new Date(new Date(`${date}T00:00:00Z`).getTime() - 7 * 86_400_000)) : "";
 	const current = quotes.filter((q) => q.date >= since);
-	const key = `${date}|${current.map((q) => `${q.symbol}:${q.close}`).join(",")}`;
+	const live = await db.signals.outcomes(exchange, SIGNAL_RULE);
+	const key = `${date}|${JSON.stringify(live)}|${current.map((q) => `${q.symbol}:${q.close}`).join(",")}`;
 	const hit = cache.get(exchange);
 	if (hit?.key === key) return hit;
 
-	const ideas: SignalIdea[] = [];
+	const calls: { q: Quote; call: SignalCall }[] = [];
 	const tracks: Record<Side, TrackRecord[]> = { BUY: [], SELL: [] };
 	for (const q of current) {
 		const bars = await db.market.history(q.exchange, q.symbol, 730);
@@ -76,12 +85,13 @@ async function scan(db: Database, exchange: Exchange): Promise<Scan> {
 		const a = analyzeSignals(bars);
 		tracks.BUY.push(a.track.BUY);
 		tracks.SELL.push(a.track.SELL);
-		if (a.call) ideas.push(toIdea(q, a.call));
+		if (a.call) calls.push({ q, call: a.call });
 	}
+	const summary = { BUY: combine("BUY", tracks.BUY), SELL: combine("SELL", tracks.SELL) };
 	const result = {
 		key,
-		ideas: ideas.sort(rank),
-		summary: { BUY: combine("BUY", tracks.BUY), SELL: combine("SELL", tracks.SELL) },
+		ideas: calls.map(({ q, call }) => toIdea(q, call, summary[call.side], live[call.side])).sort(rank),
+		summary,
 	};
 	cache.set(exchange, result);
 	return result;
@@ -105,9 +115,10 @@ export async function signalSummary(
 	return (await scan(db, exchange)).summary;
 }
 
-function toIdea(q: Quote, call: SignalCall): SignalIdea {
+function toIdea(q: Quote, call: SignalCall, market: MarketTrack, live: WinCount): SignalIdea {
 	const t = call.track;
 	const edge = t.winRate !== null && t.baseRate !== null ? round(t.winRate - t.baseRate, 1) : null;
+	const confidence = confidenceFor(t, market, live);
 	return {
 		exchange: q.exchange,
 		symbol: q.symbol,
@@ -120,7 +131,24 @@ function toIdea(q: Quote, call: SignalCall): SignalIdea {
 		call,
 		edge,
 		evidence: t.trades < MIN_TRADES ? "thin" : (edge ?? 0) > 0 ? "backed" : "weak",
+		confidence,
 	};
+}
+
+/** Confidence for one security's call, given its market's record and the live outcomes so far. */
+export function confidenceFor(own: TrackRecord, market: MarketTrack, live: WinCount): Confidence {
+	return estimateConfidence(
+		{ wins: own.wins, trades: own.trades },
+		{ wins: market.wins, trades: market.trades },
+		live,
+		own.baseRate ?? market.baseRate,
+	);
+}
+
+/** The confidence for a security's current call (for the security page). */
+export async function callConfidence(db: Database, exchange: Exchange, call: SignalCall): Promise<Confidence> {
+	const [summary, live] = await Promise.all([signalSummary(db, exchange), db.signals.outcomes(exchange, SIGNAL_RULE)]);
+	return confidenceFor(call.track, summary[call.side], live[call.side]);
 }
 
 /** Trade-weighted results; base rates averaged per security. */
@@ -128,6 +156,8 @@ function combine(side: Side, tracks: TrackRecord[]): MarketTrack {
 	const trades = tracks.reduce((s, t) => s + t.trades, 0);
 	const wins = tracks.reduce((s, t) => s + t.wins, 0);
 	const returns = tracks.reduce((s, t) => s + (t.avgReturnPct ?? 0) * t.trades, 0);
+	const grossWins = tracks.reduce((s, t) => s + t.grossWins, 0);
+	const grossReturns = tracks.reduce((s, t) => s + (t.grossAvgReturnPct ?? 0) * t.trades, 0);
 	const base = tracks.filter((t) => t.baseRate !== null);
 	const mean = (values: number[]) =>
 		values.length ? round(values.reduce((a, b) => a + b, 0) / values.length, 1) : null;
@@ -139,6 +169,9 @@ function combine(side: Side, tracks: TrackRecord[]): MarketTrack {
 		wins,
 		winRate: trades ? round((wins / trades) * 100, 1) : null,
 		avgReturnPct: trades ? round(returns / trades, 2) : null,
+		grossWinRate: trades ? round((grossWins / trades) * 100, 1) : null,
+		grossAvgReturnPct: trades ? round(grossReturns / trades, 2) : null,
+		costPct: tracks[0]?.costPct ?? null,
 		baseRate,
 		baseAvgPct: mean(base.map((t) => t.baseAvgPct ?? 0)),
 		verdict: verdict(wins, trades, baseRate),
@@ -153,11 +186,12 @@ export function verdict(wins: number, trades: number, baseRatePct: number | null
 	return z >= 1.645 ? "better" : z <= -1.645 ? "worse" : "unclear";
 }
 
-/** Evidence first (enough past trades and better than chance), then strength, then win rate. */
+/** Evidence first (enough past trades and better than chance), then strength, then estimated chance of profit. */
 function rank(a: SignalIdea, b: SignalIdea): number {
 	const tier = (i: SignalIdea) => (i.evidence === "backed" ? 2 : 0) + (i.call.strength === "strong" ? 1 : 0);
 	return (
 		tier(b) - tier(a) ||
+		b.confidence.probability - a.confidence.probability ||
 		(b.call.track.winRate ?? -1) - (a.call.track.winRate ?? -1) ||
 		b.call.track.trades - a.call.track.trades
 	);

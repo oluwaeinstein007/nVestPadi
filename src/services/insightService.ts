@@ -40,7 +40,7 @@ Rules:
 - If the context doesn't cover the question, say so plainly and suggest what would help (e.g. opening the stock in nVestPadi to load its history, or adding research documents).
 - Prefer specifics: numbers, percentages, dates. Use NGN for NGX prices and USD for US stocks and crypto.
 - Be concise: a direct answer first, then short supporting bullets.
-- When asked what to buy or sell, or when, use the signal lists and snapshots: name the securities, their entry/stop/target levels and each signal's past success rate with how many past signals it's based on. Say plainly that success rates are historical, before fees, and not a guarantee; fewer than 5 past signals is too few to rely on.
+- When asked what to buy or sell, or when, use the signal lists and snapshots: name the securities, their entry/stop/target levels and each signal's past success rate with how many past signals it's based on. Give each signal's estimated chance of profit with its range and confidence level. Say plainly that success rates are historical, after estimated trading costs, and not a guarantee; fewer than 5 past signals is too few to rely on.
 - You provide information, not personalised investment advice.`;
 
 const MARKET_WORDS =
@@ -130,9 +130,11 @@ export class InsightService {
 							const t = i.call.track;
 							const levels = p ? ` entry ${p.entry}, stop ${p.stop}, target ${p.target}, ~${p.horizon} sessions;` : "";
 							const record = t.trades
-								? ` past ${side} signals worked ${t.winRate}% of ${t.trades} (random: ${t.baseRate}%)`
+								? ` past ${side} signals made money after costs ${t.winRate}% of ${t.trades} times (random: ${t.baseRate}%)`
 								: " no past record";
-							return `${i.symbol} (${i.name}) ${i.call.strength} ${side} at ${i.currency} ${i.close} on ${i.call.date}:${levels}${record}`;
+							const c = i.confidence;
+							const odds = ` estimated chance of profit ${c.probability}% (range ${c.low}–${c.high}%, ${c.level} confidence)`;
+							return `${i.symbol} (${i.name}) ${i.call.strength} ${side} at ${i.currency} ${i.close} on ${i.call.date}:${levels}${record};${odds}`;
 						})
 						.join("; ");
 					const m = (await signalSummary(this.db, exchange))[side];
@@ -143,7 +145,7 @@ export class InsightService {
 						title: `${exchange} current ${side} signals`,
 						source: `${exchange}:signals`,
 						kind: "analysis",
-						text: `${exchange} securities with a fresh ${side} signal (best-evidenced first): ${list}.${overall} Success rates come from replaying past signals, before fees.`,
+						text: `${exchange} securities with a fresh ${side} signal (best-evidenced first): ${list}.${overall} Success rates come from replaying past signals, after trading costs.`,
 					});
 				}
 			}

@@ -3,6 +3,7 @@
  * the HTTP server so both behave identically.
  */
 import { type AIProvider, createAIProvider } from "./ai/provider.js";
+import { configureCosts } from "./analysis/costs.js";
 import { type Config, describeDatabase } from "./config.js";
 import { TelegramClient } from "./integrations/telegram.js";
 import { errorMessage, logger } from "./lib/logger.js";
@@ -21,6 +22,7 @@ import { type Mailer, createMailer } from "./services/mailer.js";
 import { MarketService, type SyncResult } from "./services/marketService.js";
 import { Notifier } from "./services/notifier.js";
 import { PortfolioService } from "./services/portfolioService.js";
+import { type LedgerUpdate, SignalLedger } from "./services/signalLedger.js";
 import { WatchlistService } from "./services/watchlistService.js";
 import { Database } from "./storage/database.js";
 import { VectorStore } from "./storage/vectorStore.js";
@@ -43,14 +45,24 @@ export interface App {
 	billing: BillingService;
 	portfolio: PortfolioService;
 	digests: DigestService;
+	/** The live track record of every signal shown. */
+	ledger: SignalLedger;
 	bots: BotService;
 	/** Server-wide Telegram bot, when TELEGRAM_BOT_TOKEN is set. */
 	telegram: TelegramClient | null;
-	/** Sync one or more exchanges, then evaluate alerts. Partial failures are reported, not thrown. */
+	/**
+	 * Sync one or more exchanges, update the signal ledger, then evaluate alerts. Partial failures are reported, not
+	 * thrown.
+	 */
 	syncAndAlert(
 		exchanges: Exchange[],
 		options?: { symbols?: string[]; index?: boolean },
-	): Promise<{ results: SyncResult[]; errors: { exchange: Exchange; error: string }[]; triggered: TriggeredAlert[] }>;
+	): Promise<{
+		results: SyncResult[];
+		errors: { exchange: Exchange; error: string }[];
+		triggered: TriggeredAlert[];
+		ledger: LedgerUpdate[];
+	}>;
 	doctor(): Promise<HealthCheck[]>;
 	close(): Promise<void>;
 }
@@ -62,6 +74,7 @@ export interface HealthCheck {
 }
 
 export async function createApp(config: Config, overrides: { mailer?: Mailer } = {}): Promise<App> {
+	configureCosts(config.costs);
 	const db = await Database.open(config.database);
 	const ai = createAIProvider(config.ai);
 	const vectors = config.qdrant ? new VectorStore(config.qdrant) : null;
@@ -86,6 +99,8 @@ export async function createApp(config: Config, overrides: { mailer?: Mailer } =
 		appUrl: config.appUrl,
 	});
 
+	const ledger = new SignalLedger(db);
+
 	for (const warning of config.warnings) logger.warn(warning);
 
 	const app: App = {
@@ -106,6 +121,7 @@ export async function createApp(config: Config, overrides: { mailer?: Mailer } =
 		billing,
 		portfolio,
 		digests,
+		ledger,
 		telegram,
 		// Assigned below: the bot needs the finished app.
 		bots: undefined as unknown as BotService,
@@ -121,9 +137,17 @@ export async function createApp(config: Config, overrides: { mailer?: Mailer } =
 					errors.push({ exchange, error: errorMessage(err) });
 				}
 			}
+			const updates: LedgerUpdate[] = [];
+			for (const r of results) {
+				try {
+					updates.push(await ledger.update(r.exchange));
+				} catch (err) {
+					logger.error(`${r.exchange} signal ledger update failed`, { error: errorMessage(err) });
+				}
+			}
 			const triggered = await alerts.check();
 			await db.users.purgeExpired();
-			return { results, errors, triggered };
+			return { results, errors, triggered, ledger: updates };
 		},
 
 		async doctor() {

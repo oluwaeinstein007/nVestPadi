@@ -47,13 +47,15 @@ export class Scheduler {
 		const started = Date.now();
 		this.syncing = this.app.syncAndAlert(exchanges, options);
 		try {
-			const { results, errors, triggered } = (await this.syncing) as Awaited<ReturnType<App["syncAndAlert"]>>;
+			const { results, errors, triggered, ledger } = (await this.syncing) as Awaited<ReturnType<App["syncAndAlert"]>>;
 			for (const r of results) this.lastSync.set(r.exchange, Date.now());
 			logger.info("scheduled sync complete", {
 				durationMs: Date.now() - started,
 				synced: results.map((r) => `${r.exchange}:${r.bars}`).join(","),
 				errors: errors.length,
 				alerts: triggered.length,
+				signalsLogged: ledger.reduce((n, u) => n + u.logged, 0),
+				signalsClosed: ledger.reduce((n, u) => n + u.closed, 0),
 			});
 			void this.backfill(results.map((r) => r.exchange));
 		} catch (err) {

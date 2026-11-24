@@ -62,6 +62,11 @@ export const BOT_COMMANDS: BotCommand[] = [
 		arg: { name: "market", description: "ngx, us or crypto, optionally + sell", required: false },
 	},
 	{
+		name: "record",
+		description: "Live track record of every signal since launch",
+		arg: { name: "market", description: "ngx, us or crypto", required: false },
+	},
+	{
 		name: "ask",
 		description: "Ask a question about the markets",
 		arg: { name: "question", description: "Your question", required: true },
@@ -132,6 +137,8 @@ export class BotService {
 				return this.analyze(arg);
 			case "signals":
 				return this.signals(arg, ctx);
+			case "record":
+				return this.record(parseExchange(arg || undefined) ?? ctx.user?.defaultExchange ?? "NGX");
 			case "ask":
 				return this.ask(arg, ctx);
 			case "watchlist":
@@ -264,13 +271,14 @@ export class BotService {
 					? "worse than chance"
 					: "not clearly better than chance";
 		const record = m.trades
-			? `Past ${side} signals here worked ${m.winRate}% of ${m.trades} vs ${m.baseRate}% for a random ${side === "BUY" ? "entry" : "exit"}: ${verdict}.`
+			? `Past ${side} signals here made money after costs ${m.winRate}% of ${m.trades} times vs ${m.baseRate}% for a random ${side === "BUY" ? "entry" : "exit"}: ${verdict}.`
 			: "";
 		const backed = ideas.filter((i) => i.evidence === "backed").slice(0, 8);
 		const lines = backed.map((i) => {
 			const p = i.call.plan;
 			const levels = p ? ` · stop ${money(p.stop, i.currency)} · target ${money(p.target, i.currency)}` : "";
-			return `${side === "BUY" ? "🟢" : "🔴"} **${i.symbol}** ${money(i.close, i.currency)}${levels} · ${i.call.track.winRate}% of ${i.call.track.trades}`;
+			const c = i.confidence;
+			return `${side === "BUY" ? "🟢" : "🔴"} **${i.symbol}** ${money(i.close, i.currency)}${levels} · ${c.probability}% chance (${c.low}–${c.high}%, ${c.level}) · ${i.call.track.wins}/${i.call.track.trades} past`;
 		});
 		const others = ideas.length - backed.length;
 		return [
@@ -282,11 +290,37 @@ export class BotService {
 				: `No fresh ${side.toLowerCase()} signal with a track record that beats chance right now.`,
 			others ? `${others} more with a thin or poor record — see ${this.app.config.appUrl}/app` : "",
 			"",
-			"Success = past signals on that stock replayed with the same stop/target, before fees. Not investment advice.",
+			"Chance = estimated odds of a profit after trading costs, from past signals on that stock and across the market. Live record: /record. Not investment advice.",
 		]
 			.filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "")
 			.join("\n")
 			.trim();
+	}
+
+	/** "/record", "/record us": how logged signals have actually played out since launch. */
+	private async record(exchange: Exchange): Promise<string> {
+		const r = await this.app.ledger.report({ exchange, recent: 5 });
+		const mine = r.exchanges.find((e) => e.exchange === exchange);
+		const lines = (["BUY", "SELL"] as const).map((side) => {
+			const t = mine?.[side];
+			if (!t?.signals) return `${side}: no signals logged yet.`;
+			if (!t.trades) return `${side}: ${t.signals} logged, none finished yet.`;
+			return `${side}: ${t.wins} of ${t.trades} finished signals made money after costs (${t.winRate}%, avg ${pct(t.avgNetReturnPct)}) vs ${t.baseRate ?? "—"}% for a random entry · ${t.open} open`;
+		});
+		const recent = r.recent
+			.filter((s) => s.status === "closed")
+			.map(
+				(s) =>
+					`${s.side === "BUY" ? "🟢" : "🔴"} ${s.symbol} ${s.signalDate}: ${pct(s.netReturnPct)} after costs (${s.exitReason})`,
+			);
+		return [
+			`**${MARKET_NAMES[exchange]} live track record**${r.since ? ` since ${r.since.slice(0, 10)}` : ""}`,
+			...lines,
+			recent.length ? `\nLatest finished:\n${recent.join("\n")}` : "",
+			`\nEvery signal is logged when first shown and scored from the next session. Full record: ${this.app.config.appUrl}/track-record`,
+		]
+			.filter(Boolean)
+			.join("\n");
 	}
 
 	private async ask(question: string, ctx: BotContext): Promise<string> {

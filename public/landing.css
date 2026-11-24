@@ -1225,6 +1225,125 @@ button.btn {
 	color: var(--text);
 }
 
+/* ---------- Track record ---------- */
+.record {
+	max-width: 1040px;
+	padding-block: 56px 80px;
+}
+.record h1 {
+	font-size: clamp(32px, 4vw, 44px);
+	margin-bottom: 8px;
+}
+.record .lead {
+	margin: 0 0 8px;
+	max-width: 760px;
+}
+.record h2 {
+	font-size: 20px;
+	margin: 40px 0 8px;
+}
+.record .small {
+	font-size: 13px;
+}
+.record-tabs {
+	display: inline-flex;
+	gap: 4px;
+	margin: 20px 0;
+	padding: 4px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+}
+.record-tabs button {
+	border: 0;
+	background: none;
+	color: var(--muted);
+	font: inherit;
+	font-size: 14px;
+	padding: 6px 14px;
+	border-radius: 999px;
+	cursor: pointer;
+}
+.record-tabs button[aria-selected="true"] {
+	background: var(--brand-soft);
+	color: var(--brand-strong);
+	font-weight: 600;
+}
+.record-stats {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 16px;
+}
+.record-card {
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	padding: 20px;
+}
+.record-card h3 {
+	font-size: 15px;
+	margin: 0 0 4px;
+}
+.record-card p {
+	margin: 6px 0;
+}
+.record-card .big {
+	font-size: 36px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	margin: 4px 0;
+}
+.record-table-wrap {
+	overflow-x: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+.record-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 14px;
+	font-variant-numeric: tabular-nums;
+}
+.record-table th,
+.record-table td {
+	text-align: left;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--border);
+	white-space: nowrap;
+}
+.record-table th {
+	color: var(--muted);
+	font-weight: 600;
+	font-size: 12px;
+	background: var(--bg-alt);
+}
+.record-table tr:last-child td {
+	border-bottom: 0;
+}
+.record .pill {
+	display: inline-block;
+	font-size: 11px;
+	font-weight: 700;
+	padding: 2px 7px;
+	border-radius: 6px;
+}
+.record .pill.BUY {
+	color: var(--up);
+	background: color-mix(in srgb, var(--up) 12%, transparent);
+}
+.record .pill.SELL {
+	color: var(--down);
+	background: color-mix(in srgb, var(--down) 12%, transparent);
+}
+.record-how li {
+	color: var(--muted);
+	margin-bottom: 6px;
+}
+@media (max-width: 600px) {
+	.record-stats {
+		grid-template-columns: 1fr;
+	}
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 960px) {
 	.nav-links {

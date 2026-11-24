@@ -146,7 +146,9 @@ export class DigestService {
 			...positions.filter((p) => p.signal?.date === day).map((p) => ({ ...p.signal, symbol: p.symbol, held: true })),
 			...watched,
 		].map((s) => {
-			const record = s.trades ? ` (past ${s.side} signals worked ${s.winRate}% of ${s.trades})` : "";
+			const record = s.trades
+				? ` (past ${s.side} signals made money after costs ${s.winRate}% of ${s.trades} times)`
+				: "";
 			const what = s.held ? (s.side === "SELL" ? " — you hold it; consider trimming" : " — you hold it") : "";
 			return `${s.side === "BUY" ? "🟢" : "🔴"} ${s.side} ${s.symbol}${what}${record}`;
 		});

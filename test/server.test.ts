@@ -159,6 +159,12 @@ describe("HTTP API (cloud mode)", () => {
 		assert.equal(detail.watched, true);
 		const snapshot = await json<{ count: number; gainers: unknown[] }>(await call("/api/public/snapshot"));
 		assert.equal(snapshot.count, 2);
+		const record = await call("/api/public/track-record?exchange=NGX", { origin: null });
+		assert.equal(record.status, 200);
+		const body = await json<{ rule: string; costs: { NGX: { roundTripPct: number } } }>(record);
+		assert.equal(body.rule, "breakout-50/200");
+		assert.ok(body.costs.NGX.roundTripPct > 3);
+		assert.equal((await call("/track-record")).status, 200);
 	});
 
 	it("serves signal ideas and NGX live quotes from stored data", async () => {
