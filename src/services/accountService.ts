@@ -91,13 +91,13 @@ export class AccountService {
 		};
 	}
 
-	updateProfile(user: User, patch: { name?: string; defaultExchange?: Exchange }): Promise<User> {
+	async updateProfile(user: User, patch: { name?: string; defaultExchange?: Exchange }): Promise<User> {
 		const name = patch.name?.trim();
 		if (patch.name !== undefined && !name) throw new ValidationError("Name can't be empty.");
 		return this.db.users.update(user.id, { name, defaultExchange: patch.defaultExchange });
 	}
 
-	updateNotifications(
+	async updateNotifications(
 		user: User,
 		patch: { emailAlerts?: boolean; dailyDigest?: boolean; discordWebhookUrl?: string | null },
 	): Promise<User> {
