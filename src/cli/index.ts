@@ -31,7 +31,7 @@ function help(name?: string) {
 		return;
 	}
 	out(`
-${c.bold(c.cyan("nVestPadi"))} ${c.dim(`v${VERSION}`)} — market intelligence for NGX and US equities
+${c.bold(c.cyan("nVestPadi"))} ${c.dim(`v${VERSION}`)} — market intelligence for NGX stocks, US stocks and crypto
 
 ${c.bold("Usage:")} nvest <command> [options]   ${c.dim("(global: --json, --verbose, --help)")}
 
@@ -43,6 +43,7 @@ ${c.bold("Examples:")}
   nvest sync                         ${c.dim("# today's NGX + US prices")}
   nvest market                       ${c.dim("# NGX breadth, movers, sectors")}
   nvest analyze DANGCEM              ${c.dim("# technical report")}
+  nvest signals --side buy           ${c.dim("# buy signals with stop, target and success rate")}
   nvest screen --sector bank --sort active
   nvest alerts add GTCO above 100
   nvest ingest file ./reports/zenith-2025-annual.pdf

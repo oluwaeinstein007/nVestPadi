@@ -1,4 +1,5 @@
 /** Market data commands: sync, history, quote, analyze, market, screen. */
+import { signalIdeas, signalSummary } from "../../analysis/ideas.js";
 import { SCREEN_SORTS, type ScreenSort, marketOverview, screen } from "../../analysis/market.js";
 import { parseExchange } from "../../markets/types.js";
 import { YAHOO_RANGES, type YahooRange } from "../../markets/yahoo.js";
@@ -135,7 +136,7 @@ export const marketCommands: Record<string, Command> = {
 				out(
 					c.dim(
 						t.trades
-							? `  Past ${t.side} signals: ${t.wins}/${t.trades} worked (${t.winRate}%) · random entry ${t.baseRate}%${t.trades < r.rules.minTrades ? " · too few to rely on" : ""}`
+							? `  Past ${t.side} signals: ${t.wins}/${t.trades} worked (${t.winRate}%) · random ${t.side === "BUY" ? "entry" : "exit"} ${t.baseRate}%${t.trades < r.rules.minTrades ? " · too few to rely on" : ""}`
 							: `  No past ${t.side} signals to measure yet`,
 					),
 				);
@@ -179,6 +180,62 @@ export const marketCommands: Record<string, Command> = {
 			out(heading("Summary"));
 			for (const h of r.highlights) out(`  • ${h}`);
 			out(c.dim("\n  Educational analysis, not investment advice."));
+		},
+	},
+	signals: {
+		usage: "signals [--exchange NGX|US|CRYPTO] [--side BUY|SELL] [--all]",
+		summary: "Fresh buy/sell signals with entry, stop, target and each one's past success rate",
+		options: { ...exchangeFlag, side: { type: "string" }, all: { type: "boolean" } },
+		async run(app, _args, flags, json) {
+			const exchange = parseExchange(str(flags.exchange)) ?? "NGX";
+			const sideFlag = str(flags.side)?.toUpperCase();
+			if (sideFlag && sideFlag !== "BUY" && sideFlag !== "SELL") throw new UsageError("--side must be BUY or SELL");
+			const side = (sideFlag ?? "BUY") as "BUY" | "SELL";
+			const [ideas, market] = await Promise.all([
+				signalIdeas(app.db, exchange, { side }),
+				signalSummary(app.db, exchange),
+			]);
+			if (json) return { ideas, market };
+			const shown = flags.all ? ideas : ideas.filter((i) => i.evidence === "backed");
+			const m = market[side];
+			out(heading(`${exchange} ${side} signals`, `${ideas.length} fresh`));
+			if (m.trades) {
+				const verdict = {
+					better: c.green("better than chance"),
+					worse: c.red("worse than chance"),
+					unclear: c.yellow("not clearly better than chance"),
+				}[m.verdict];
+				out(
+					`  Across ${m.symbols} securities, past ${side} signals worked ${m.winRate}% of ${m.trades} vs ${m.baseRate}% for a random ${side === "BUY" ? "entry" : "exit"} — ${verdict}.`,
+				);
+			}
+			if (shown.length === 0) {
+				out(
+					c.dim(
+						ideas.length
+							? `\n  None with a track record that beats chance. ${ideas.length} more with --all.`
+							: "\n  No fresh signals right now.",
+					),
+				);
+				return;
+			}
+			out(
+				table(shown, [
+					{ header: "Symbol", value: (i) => `${c.bold(i.symbol)} ${c.dim(i.call.strength)}` },
+					{ header: "Price", value: (i) => price(i.close), align: "right" },
+					{ header: side === "BUY" ? "Stop" : "Wrong above", value: (i) => price(i.call.plan?.stop), align: "right" },
+					{ header: side === "BUY" ? "Target" : "Down to", value: (i) => price(i.call.plan?.target), align: "right" },
+					{
+						header: "Success",
+						value: (i) => (i.call.track.trades ? `${i.call.track.winRate}% of ${i.call.track.trades}` : "—"),
+						align: "right",
+					},
+					{ header: "Evidence", value: (i) => (i.evidence === "backed" ? c.green(i.evidence) : c.yellow(i.evidence)) },
+				]),
+			);
+			if (!flags.all && ideas.length > shown.length)
+				out(c.dim(`\n  ${ideas.length - shown.length} more with a thin or poor record: --all`));
+			out(c.dim("\n  Success = past signals on that security replayed with the same plan, before fees. Not advice."));
 		},
 	},
 	market: {

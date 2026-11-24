@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 import { marketOverview, screen } from "../src/analysis/market.js";
 import { buildReport } from "../src/analysis/report.js";
-import { titleCase } from "../src/markets/ngx.js";
+import { fetchNgxSnapshot, titleCase } from "../src/markets/ngx.js";
 import type { PriceBar } from "../src/markets/types.js";
 import { AlertService } from "../src/services/alertService.js";
 import { InsightService } from "../src/services/insightService.js";
@@ -177,6 +177,38 @@ describe("symbol detection for AI answers", () => {
 });
 
 describe("NGX helpers", () => {
+	it("keeps stocks whose close is still blank mid-session, at the previous close", async (t) => {
+		const row = (symbol: string, close: number | null) => ({
+			Symbol: symbol,
+			Sector: "FINANCIAL SERVICES",
+			TradeDate: "2026-11-24T00:00:00",
+			OpeningPrice: 6.9,
+			HighPrice: close,
+			LowPrice: close,
+			ClosePrice: close,
+			PrevClosingPrice: 6.9,
+			Change: close === null ? null : close - 6.9,
+			PercChange: null,
+			Trades: 67,
+			Volume: 505496,
+			Value: 3214165.25,
+		});
+		// The board answers JSON; the afx name lookup gets nothing useful and falls back to tickers.
+		t.mock.method(globalThis, "fetch", async (url: string) =>
+			String(url).includes("ngxgroup")
+				? new Response(JSON.stringify([row("ABBEYBANK", null), row("GTCO", 7.2)]))
+				: new Response("<html></html>"),
+		);
+		const { bars } = await fetchNgxSnapshot();
+		const abbey = bars.find((b) => b.symbol === "ABBEYBANK");
+		assert.equal(bars.length, 2);
+		assert.equal(abbey?.close, 6.9);
+		assert.equal(abbey?.change, 0);
+		assert.equal(abbey?.changePct, 0);
+		assert.equal(abbey?.trades, 67);
+		assert.equal(bars.find((b) => b.symbol === "GTCO")?.changePct, 4.35);
+	});
+
 	it("title-cases sectors sensibly", async () => {
 		assert.equal(titleCase("OIL AND GAS"), "Oil and Gas");
 		assert.equal(titleCase("ICT"), "ICT");

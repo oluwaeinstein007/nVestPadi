@@ -2,13 +2,14 @@
  * Chat bot commands, shared by Telegram and Discord.
  *
  * - Anyone (groups, channels, Discord servers, unlinked DMs) gets market data:
- *   /market, /quote, /analyze and rate-limited /ask.
+ *   /market, /quote, /analyze, /signals and rate-limited /ask.
  * - A Telegram DM linked to an account (Settings → Connect Telegram) also gets
  *   personal commands scoped strictly to that account: /watchlist, /portfolio,
  *   /alerts, /digest — and /ask counts against that account's plan.
  *
  * Replies use light markup (**bold**, `code`) that each adapter converts.
  */
+import { signalIdeas, signalSummary } from "../analysis/ideas.js";
 import { marketOverview } from "../analysis/market.js";
 import type { App } from "../app.js";
 import { hashToken, randomToken } from "../lib/crypto.js";
@@ -56,6 +57,11 @@ export const BOT_COMMANDS: BotCommand[] = [
 		arg: { name: "symbol", description: "e.g. DANGCEM", required: true },
 	},
 	{
+		name: "signals",
+		description: "Fresh buy/sell signals with stop, target and success rate",
+		arg: { name: "market", description: "ngx, us or crypto, optionally + sell", required: false },
+	},
+	{
 		name: "ask",
 		description: "Ask a question about the markets",
 		arg: { name: "question", description: "Your question", required: true },
@@ -85,7 +91,7 @@ export class BotService {
 		const telegram = this.app.telegram;
 		if (!telegram) throw new FeatureUnavailableError("Telegram", ["TELEGRAM_BOT_TOKEN"]);
 		const token = randomToken(24);
-		this.app.db.users.createAuthToken(hashToken(token), user.id, "telegram-link", LINK_TTL_SECONDS);
+		await this.app.db.users.createAuthToken(hashToken(token), user.id, "telegram-link", LINK_TTL_SECONDS);
 		return `https://t.me/${await telegram.botUsername()}?start=${token}`;
 	}
 
@@ -124,6 +130,8 @@ export class BotService {
 				return this.quote(arg);
 			case "analyze":
 				return this.analyze(arg);
+			case "signals":
+				return this.signals(arg, ctx);
 			case "ask":
 				return this.ask(arg, ctx);
 			case "watchlist":
@@ -236,6 +244,49 @@ export class BotService {
 		]
 			.filter(Boolean)
 			.join("\n");
+	}
+
+	/** "/signals", "/signals us", "/signals ngx sell": evidence-backed ideas first, with the market's record. */
+	private async signals(arg: string, ctx: BotContext): Promise<string> {
+		const words = arg.toLowerCase().split(/\s+/).filter(Boolean);
+		const side = words.includes("sell") ? "SELL" : "BUY";
+		const exchange =
+			parseExchange(words.find((w) => w !== "sell" && w !== "buy")) ?? ctx.user?.defaultExchange ?? "NGX";
+		const [ideas, market] = await Promise.all([
+			signalIdeas(this.app.db, exchange, { side, limit: 30 }),
+			signalSummary(this.app.db, exchange),
+		]);
+		const m = market[side];
+		const verdict =
+			m.verdict === "better"
+				? "better than chance"
+				: m.verdict === "worse"
+					? "worse than chance"
+					: "not clearly better than chance";
+		const record = m.trades
+			? `Past ${side} signals here worked ${m.winRate}% of ${m.trades} vs ${m.baseRate}% for a random ${side === "BUY" ? "entry" : "exit"}: ${verdict}.`
+			: "";
+		const backed = ideas.filter((i) => i.evidence === "backed").slice(0, 8);
+		const lines = backed.map((i) => {
+			const p = i.call.plan;
+			const levels = p ? ` · stop ${money(p.stop, i.currency)} · target ${money(p.target, i.currency)}` : "";
+			return `${side === "BUY" ? "🟢" : "🔴"} **${i.symbol}** ${money(i.close, i.currency)}${levels} · ${i.call.track.winRate}% of ${i.call.track.trades}`;
+		});
+		const others = ideas.length - backed.length;
+		return [
+			`**${MARKET_NAMES[exchange]} ${side} signals**`,
+			record,
+			"",
+			lines.length
+				? lines.join("\n")
+				: `No fresh ${side.toLowerCase()} signal with a track record that beats chance right now.`,
+			others ? `${others} more with a thin or poor record — see ${this.app.config.appUrl}/app` : "",
+			"",
+			"Success = past signals on that stock replayed with the same stop/target, before fees. Not investment advice.",
+		]
+			.filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "")
+			.join("\n")
+			.trim();
 	}
 
 	private async ask(question: string, ctx: BotContext): Promise<string> {

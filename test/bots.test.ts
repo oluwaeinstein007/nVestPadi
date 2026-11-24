@@ -139,6 +139,11 @@ describe("chat bot", () => {
 			"groups only react to commands",
 		);
 		assert.match((await app.bots.handleText("/ask how are banks?", dm())) ?? "", /aren't enabled/);
+		// 70 sessions is too short for breakout signals (they need the 200-day average): an honest empty answer.
+		const signals = (await app.bots.handleText("/signals ngx sell", dm({ isPrivate: false }))) ?? "";
+		assert.match(signals, /\*\*Nigerian Exchange SELL signals\*\*/);
+		assert.match(signals, /No fresh sell signal/);
+		assert.match(signals, /Not investment advice/);
 	});
 
 	it("links a Telegram DM with a one-time token and scopes commands to that account", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
-import { signalIdeas, signalSummary } from "../src/analysis/ideas.js";
+import { signalIdeas, signalSummary, verdict } from "../src/analysis/ideas.js";
 import { buildReport } from "../src/analysis/report.js";
 import { analyzeSignals, breakoutStrategy, describeTrack } from "../src/analysis/signals.js";
 import { createApp } from "../src/app.js";
@@ -114,6 +114,16 @@ describe("signal ideas", () => {
 		const summary = await signalSummary(db, "NGX");
 		assert.equal(summary.BUY.symbols, 2);
 		assert.equal(summary.BUY.side, "BUY");
+	});
+});
+
+describe("market verdict", () => {
+	it("only calls a record better or worse than chance when luck can't explain it", () => {
+		assert.equal(verdict(100, 221, 42), "unclear"); // 45.2% vs 42%: within noise
+		assert.equal(verdict(130, 221, 42), "better"); // 58.8% vs 42%
+		assert.equal(verdict(60, 221, 42), "worse");
+		assert.equal(verdict(4, 5, 49), "unclear"); // 80% of 5 is too few to tell
+		assert.equal(verdict(0, 0, 50), "unclear");
 	});
 });
 

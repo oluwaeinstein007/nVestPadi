@@ -42,6 +42,11 @@ export interface MarketTrack {
 	/** Share of random entries (any session) that moved the signal's way. */
 	baseRate: number | null;
 	baseAvgPct: number | null;
+	/**
+	 * Whether the win rate differs from the random-entry rate by more than chance
+	 * would explain (one-sided binomial z-test at 95%): "better", "worse" or "unclear".
+	 */
+	verdict: "better" | "worse" | "unclear";
 }
 
 /** Histories shorter than this give too few past signals to say anything. */
@@ -126,6 +131,7 @@ function combine(side: Side, tracks: TrackRecord[]): MarketTrack {
 	const base = tracks.filter((t) => t.baseRate !== null);
 	const mean = (values: number[]) =>
 		values.length ? round(values.reduce((a, b) => a + b, 0) / values.length, 1) : null;
+	const baseRate = mean(base.map((t) => t.baseRate as number));
 	return {
 		side,
 		symbols: tracks.length,
@@ -133,9 +139,18 @@ function combine(side: Side, tracks: TrackRecord[]): MarketTrack {
 		wins,
 		winRate: trades ? round((wins / trades) * 100, 1) : null,
 		avgReturnPct: trades ? round(returns / trades, 2) : null,
-		baseRate: mean(base.map((t) => t.baseRate as number)),
+		baseRate,
 		baseAvgPct: mean(base.map((t) => t.baseAvgPct ?? 0)),
+		verdict: verdict(wins, trades, baseRate),
 	};
+}
+
+/** One-sided z-test of `wins / trades` against the random-entry rate (in %). */
+export function verdict(wins: number, trades: number, baseRatePct: number | null): MarketTrack["verdict"] {
+	if (!trades || baseRatePct === null) return "unclear";
+	const p0 = Math.min(0.99, Math.max(0.01, baseRatePct / 100));
+	const z = (wins / trades - p0) / Math.sqrt((p0 * (1 - p0)) / trades);
+	return z >= 1.645 ? "better" : z <= -1.645 ? "worse" : "unclear";
 }
 
 /** Evidence first (enough past trades and better than chance), then strength, then win rate. */

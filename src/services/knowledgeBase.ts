@@ -71,7 +71,7 @@ export class KnowledgeBase {
 			payload: { ...item.payload, content: item.text, indexedAt },
 		}));
 		await vectors.upsert(points);
-		this.db.ledger.recordIndexed(
+		await this.db.ledger.recordIndexed(
 			changed.map(({ item, hash }) => ({
 				id: item.id,
 				kind: item.payload.kind,

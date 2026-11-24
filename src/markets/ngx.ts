@@ -67,7 +67,9 @@ export async function fetchNgxSnapshot(): Promise<MarketSnapshot> {
 	const bars: PriceBar[] = [];
 	for (const row of rows) {
 		const symbol = row.Symbol?.trim().toUpperCase();
-		const close = toNumber(row.ClosePrice);
+		// Mid-session NGX leaves ClosePrice empty for most stocks — even ones that have
+		// traded — until their price moves; until then the price is the previous close.
+		const close = toNumber(row.ClosePrice) ?? toNumber(row.PrevClosingPrice);
 		if (!symbol || close === null) continue;
 
 		securities.push({

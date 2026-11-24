@@ -87,7 +87,7 @@ Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps th
 | 🟩 **Heatmap & charts** | Most-traded names sized by value and coloured by move; candlestick or line chart with 1D (5-minute) to 2Y ranges, SMA overlays, volume and past-signal markers |
 | ⚡ **Live prices** | While a market is open, `serve` re-syncs it every `LIVE_SYNC_MINUTES` (default 5), and the stock view polls a near-live price for US stocks and crypto. NGX is delayed (no free intraday feed) |
 | 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`, `signal-buy`, `signal-sell` (threshold = minimum past success rate); one digest per user per sync; re-arm after firing |
-| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
+| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/signals`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
 | 📰 **Daily digests** | Market wrap-ups to a Telegram channel and Discord webhook; personal digests built only from each user's own data |
 | 💬 **Ask AI** | Answers grounded in live reports, market breadth and the research library, with numbered citations |
 | 📄 **Research library** | Annual-report PDFs, HTML, CSV, JSON, Markdown, or whole websites (robots.txt-aware), added by the operator with `nvest ingest` |
@@ -100,8 +100,8 @@ There are two kinds of chat delivery, and they never mix:
 
 | | Server channels (set in `.env`) | Personal (set by each user in Settings) |
 |---|---|---|
-| Telegram | `TELEGRAM_BOT_TOKEN` runs the bot. `TELEGRAM_CHAT_ID` is a channel or group that gets the **daily market digest**, and anyone there can use `/market`, `/quote`, `/analyze` and `/ask` (rate-limited) | **Connect Telegram** opens a one-time `t.me` link. That private chat then gets the user's **alerts** and **personal digest**, and answers `/watchlist`, `/portfolio`, `/alerts`, `/digest on\|off` and `/ask` (counted against their plan) |
-| Discord | `DISCORD_WEBHOOK_URL` gets the daily market digest. With an app (`DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`), `/market`, `/quote`, `/analyze` and `/ask` work as slash commands in any server that adds it | A Pro user's own channel webhook gets their alerts and personal digest |
+| Telegram | `TELEGRAM_BOT_TOKEN` runs the bot. `TELEGRAM_CHAT_ID` is a channel or group that gets the **daily market digest**, and anyone there can use `/market`, `/quote`, `/analyze`, `/signals` and `/ask` (rate-limited) | **Connect Telegram** opens a one-time `t.me` link. That private chat then gets the user's **alerts** and **personal digest**, and answers `/watchlist`, `/portfolio`, `/alerts`, `/digest on\|off` and `/ask` (counted against their plan) |
+| Discord | `DISCORD_WEBHOOK_URL` gets the daily market digest. With an app (`DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`), `/market`, `/quote`, `/analyze`, `/signals` and `/ask` work as slash commands in any server that adds it | A Pro user's own channel webhook gets their alerts and personal digest |
 
 - **Personal digests** contain only that user's watchlist moves, portfolio value and P&L, and alert status. They're sent after the user's default market closes and skipped when there's nothing personal to report.
 - **Schedule (UTC):** NGX 15:00 (after the 14:30 WAT close), US 21:30, crypto 07:00. Stock markets skip weekends and days without a new session. Each digest is claimed in the database before sending, so restarts never double-send. Runs inside `nvest serve`; turn off with `DAILY_DIGEST=false`.
@@ -219,7 +219,8 @@ With **Backblaze B2** (10 GB free):
 | `history <SYM>` | Backfill daily history. `--exchange` `--range 1mo…max` |
 | `quote <SYM...>` | Latest stored quotes |
 | `analyze <SYM>` | Full technical report |
-| `market` | Breadth, movers, sectors. `--exchange NGX\|US` `--top N` |
+| `market` | Breadth, movers, sectors. `--exchange NGX\|US\|CRYPTO` `--top N` |
+| `signals` | Fresh buy/sell signals with stop, target and success rate; evidence-backed first. `--exchange` `--side BUY\|SELL` `--all` |
 | `screen` | Screener. `--sector` `--search` `--sort` `--min-price` `--max-price` `--rsi-below` `--rsi-above` `--limit` |
 | `watchlist [list\|add\|remove]` | A user's watchlist (`--user email`, default: the owner) |
 | `alerts [list\|add\|remove\|rearm\|check]` | e.g. `alerts add GTCO above 130 --note "breakout"` (`--user email`) |

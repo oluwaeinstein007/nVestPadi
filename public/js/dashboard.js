@@ -563,12 +563,12 @@ async function loadSignals() {
 function marketRecord(m) {
 	if (!m || !m.trades) return "";
 	const what = m.side === "BUY" ? "made money" : "were followed by a fall";
-	const verdict =
-		m.baseRate == null
-			? ""
-			: m.winRate > m.baseRate + 3
-				? `<b class="up">better than a random entry (${m.baseRate}%)</b>.`
-				: `<b class="down">no better than a random entry (${m.baseRate}%)</b>, so treat these as ideas to research, not recommendations.`;
+	const random = `a random ${m.side === "BUY" ? "entry" : "exit"} (${m.baseRate}%)`;
+	const verdict = {
+		better: `<b class="up">better than ${random}</b>, by more than luck would explain.`,
+		worse: `<b class="down">worse than ${random}</b>, so treat these as ideas to research, not recommendations.`,
+		unclear: `<b class="down">not clearly better than ${random}</b>, so treat these as ideas to research, not recommendations.`,
+	}[m.verdict];
 	return `Across ${m.symbols} ${isCrypto() ? "coins" : "stocks"} here, ${m.trades} past ${m.side} signals ${what} ${m.winRate}% of the time: ${verdict}`;
 }
 

@@ -137,7 +137,7 @@ export class InsightService {
 						.join("; ");
 					const m = (await signalSummary(this.db, exchange))[side];
 					const overall = m.trades
-						? ` Across the market, past ${side} signals worked ${m.winRate}% of ${m.trades} vs ${m.baseRate}% for a random entry.`
+						? ` Across the market, past ${side} signals worked ${m.winRate}% of ${m.trades} vs ${m.baseRate}% for a random entry (${m.verdict === "better" ? "better than chance" : m.verdict === "worse" ? "worse than chance" : "not clearly better than chance"}).`
 						: "";
 					context.push({
 						title: `${exchange} current ${side} signals`,
