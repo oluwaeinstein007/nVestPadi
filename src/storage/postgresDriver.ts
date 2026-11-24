@@ -52,6 +52,19 @@ export function connectionSettings(options: PostgresOptions): pg.PoolConfig {
 	return { connectionString: url.toString(), ssl, max: options.poolMax ?? 5, connectionTimeoutMillis: 15_000 };
 }
 
+/**
+ * A URL without a password makes SCRAM servers (every managed provider) fail with the cryptic "client password must be
+ * a string". Say what is wrong instead; passwordless `trust` setups still work, so this is a warning, not an error.
+ */
+function warnIfNoPassword(rawUrl: string): void {
+	const url = new URL(rawUrl);
+	if (!url.password && !process.env.PGPASSWORD) {
+		logger.warn(
+			"DATABASE_URL has no password (postgres://user:password@host/db). If the server asks for one the connection fails with 'SASL: client password must be a string' — check the variable is set to the full URL, with special characters in the password percent-encoded.",
+		);
+	}
+}
+
 /** `?` → `$1, $2, …`, leaving anything inside string literals, quoted identifiers and comments alone. */
 export function toPositional(sql: string): string {
 	let out = "";
@@ -83,6 +96,7 @@ export class PostgresDriver implements SqlDriver {
 	private readonly scope = new AsyncLocalStorage<pg.PoolClient>();
 
 	constructor(options: PostgresOptions) {
+		warnIfNoPassword(options.url);
 		this.pool = new pg.Pool(connectionSettings(options));
 		// An idle connection dropped by the server must not crash the process; the pool replaces it.
 		this.pool.on("error", (err) => logger.warn("postgres: idle connection error", { error: err.message }));
