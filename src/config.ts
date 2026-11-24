@@ -273,7 +273,9 @@ export function parseConfig(source: NodeJS.ProcessEnv): Config {
 	let postgresUrl = env.DATABASE_URL;
 	if (!postgresUrl && isPostgresUrl(env.DATABASE_PATH)) {
 		postgresUrl = env.DATABASE_PATH;
-		warnings.push("DATABASE_PATH holds a PostgreSQL URL — move it to DATABASE_URL (DATABASE_PATH is for SQLite files).");
+		warnings.push(
+			"DATABASE_PATH holds a PostgreSQL URL — move it to DATABASE_URL (DATABASE_PATH is for SQLite files).",
+		);
 	}
 	const database: DatabaseConfig = postgresUrl
 		? {

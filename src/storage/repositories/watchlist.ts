@@ -29,11 +29,10 @@ export class WatchlistRepository {
 	}
 
 	async has(userId: number, exchange: Exchange, symbol: string): Promise<boolean> {
-		const row = await this.db.get("SELECT 1 AS present FROM watchlist WHERE user_id = ? AND exchange = ? AND symbol = ?", [
-			userId,
-			exchange,
-			symbol.toUpperCase(),
-		]);
+		const row = await this.db.get(
+			"SELECT 1 AS present FROM watchlist WHERE user_id = ? AND exchange = ? AND symbol = ?",
+			[userId, exchange, symbol.toUpperCase()],
+		);
 		return row !== undefined;
 	}
 
@@ -45,6 +44,10 @@ export class WatchlistRepository {
 		const rows = await this.db.all("SELECT exchange, symbol, added_at FROM watchlist WHERE user_id = ? ORDER BY id", [
 			userId,
 		]);
-		return rows.map((r) => ({ exchange: r.exchange as Exchange, symbol: String(r.symbol), addedAt: String(r.added_at) }));
+		return rows.map((r) => ({
+			exchange: r.exchange as Exchange,
+			symbol: String(r.symbol),
+			addedAt: String(r.added_at),
+		}));
 	}
 }

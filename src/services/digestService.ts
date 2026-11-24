@@ -90,10 +90,7 @@ export class DigestService {
 	}
 
 	/** The user's own wrap-up: watchlist moves, portfolio P&L, alerts. Null when there's nothing personal to say. */
-	async userDigest(
-		user: User,
-		day = isoDate(new Date()),
-	): Promise<{ subject: string; paragraphs: string[] } | null> {
+	async userDigest(user: User, day = isoDate(new Date())): Promise<{ subject: string; paragraphs: string[] } | null> {
 		const paragraphs: string[] = [];
 
 		const watch = (await this.watchlists.list(user))

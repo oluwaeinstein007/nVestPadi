@@ -9,11 +9,13 @@ import { toTelegramHtml } from "../src/integrations/telegram.js";
 import { hashToken } from "../src/lib/crypto.js";
 import { isoDate } from "../src/lib/util.js";
 import type { BotContext } from "../src/services/botService.js";
-import { TestMailer, makeBars, security, seed, user } from "./helpers.js";
+import { TestMailer, dropTestDatabases, makeBars, security, seed, testEnv, user } from "./helpers.js";
 
-function setup(env: Record<string, string> = {}) {
+after(dropTestDatabases);
+
+async function setup(env: Record<string, string> = {}) {
 	const mailer = new TestMailer();
-	const app = await createApp(parseConfig({ DATABASE_PATH: ":memory:", NODE_ENV: "test", ...env }), { mailer });
+	const app = await createApp(parseConfig(await testEnv(env)), { mailer });
 	const today = isoDate(new Date());
 	// Two stocks whose latest bar is today, with enough history to avoid network backfills.
 	const start = new Date(Date.now() - 69 * 86_400_000).toISOString().slice(0, 10);
@@ -49,8 +51,8 @@ const dm = (overrides: Partial<BotContext> = {}): BotContext => ({
 
 describe("portfolio", () => {
 	it("values positions per currency and averages repeat buys", async () => {
-		const { app } = setup({ APP_MODE: "cloud" });
-		const u = user(app.db);
+		const { app } = await setup({ APP_MODE: "cloud" });
+		const u = await user(app.db);
 		await app.portfolio.add(u, { symbol: "GTCO", quantity: 10, avgCost: 100 });
 		await app.portfolio.add(u, { symbol: "GTCO", quantity: 10, avgCost: 120 });
 		const { positions, totals } = await app.portfolio.get(u);
@@ -61,26 +63,26 @@ describe("portfolio", () => {
 		assert.equal(positions[0]?.pnl, 20 * 169 - 2200);
 		assert.equal(positions[0]?.dayPnl, 20);
 		assert.equal(totals[0]?.currency, "NGN");
-		await assert.rejects(await app.portfolio.add(u, { symbol: "GTCO", quantity: 0, avgCost: 1 }), /greater than 0/);
+		await assert.rejects(app.portfolio.add(u, { symbol: "GTCO", quantity: 0, avgCost: 1 }), /greater than 0/);
 	});
 
 	it("enforces the plan's position limit", async () => {
-		const { app } = setup({ APP_MODE: "cloud" });
-		const u = user(app.db);
+		const { app } = await setup({ APP_MODE: "cloud" });
+		const u = await user(app.db);
 		for (let i = 0; i < 10; i++)
 			await app.db.holdings.insert(u.id, { exchange: "NGX", symbol: `S${i}`, quantity: 1, avgCost: 1 });
-		await assert.rejects(await app.portfolio.add(u, { symbol: "GTCO", quantity: 1, avgCost: 1 }), /up to 10 positions/);
+		await assert.rejects(app.portfolio.add(u, { symbol: "GTCO", quantity: 1, avgCost: 1 }), /up to 10 positions/);
 	});
 });
 
 describe("digests", () => {
 	it("builds a market digest and a personal digest from the user's own data only", async () => {
-		const { app } = setup();
-		const text = await app.digests.marketDigest("NGX") ?? "";
+		const { app } = await setup();
+		const text = (await app.digests.marketDigest("NGX")) ?? "";
 		assert.match(text, /\*\*Nigerian Exchange — session/);
 		assert.match(text, /Top gainers:\*\* GTCO/);
 
-		const u = user(app.db);
+		const u = await user(app.db);
 		assert.equal(await app.digests.userDigest(u), null, "nothing personal yet");
 		await app.db.watchlist.add(u.id, "NGX", "ZENITH");
 		await app.portfolio.add(u, { symbol: "GTCO", quantity: 2, avgCost: 150 });
@@ -93,8 +95,8 @@ describe("digests", () => {
 	});
 
 	it("sends each digest once per day and only after the market closes", async () => {
-		const { app, mailer, today } = setup();
-		const u = user(app.db);
+		const { app, mailer, today } = await setup();
+		const u = await user(app.db);
 		await app.db.watchlist.add(u.id, "NGX", "GTCO");
 		let refreshes = 0;
 		const refresh = async () => {
@@ -124,7 +126,7 @@ describe("digests", () => {
 
 describe("chat bot", () => {
 	it("answers public market commands and hides personal ones until linked", async () => {
-		const { app } = setup();
+		const { app } = await setup();
 		assert.match(
 			(await app.bots.handleText("/market@nvestpadi_bot ngx", dm({ isPrivate: false }))) ?? "",
 			/Gainers\*\*\nGTCO/,
@@ -140,8 +142,8 @@ describe("chat bot", () => {
 	});
 
 	it("links a Telegram DM with a one-time token and scopes commands to that account", async () => {
-		const { app } = setup();
-		const u = user(app.db);
+		const { app } = await setup();
+		const u = await user(app.db);
 		await app.db.watchlist.add(u.id, "NGX", "GTCO");
 		await app.db.users.createAuthToken(hashToken("link-token-123"), u.id, "telegram-link", 900);
 
@@ -153,7 +155,7 @@ describe("chat bot", () => {
 
 		assert.match((await app.bots.handleText("/watchlist", dm({ user: linked }))) ?? "", /GTCO ₦169\.00/);
 		assert.match((await app.bots.handleText("/digest off", dm({ user: linked }))) ?? "", /off/);
-		assert.equal(await app.db.users.byId(u.id)?.dailyDigest, false);
+		assert.equal((await app.db.users.byId(u.id))?.dailyDigest, false);
 		await app.bots.handleText("/unlink", dm({ user: await app.db.users.byId(u.id) }));
 		assert.equal(await app.db.users.byTelegramChat("42"), null);
 	});
@@ -178,8 +180,8 @@ describe("Discord interactions", () => {
 	});
 
 	it("answers pings and fast slash commands inline", async () => {
-		const { app } = setup();
-		assert.deepEqual(handleDiscordInteraction(app, { type: 1, token: "t", application_id: "1" }), { type: 1 });
+		const { app } = await setup();
+		assert.deepEqual(await handleDiscordInteraction(app, { type: 1, token: "t", application_id: "1" }), { type: 1 });
 		const res = (await handleDiscordInteraction(app, {
 			type: 2,
 			token: "t",

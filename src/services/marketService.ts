@@ -94,9 +94,7 @@ export class MarketService {
 		if (!force && (await this.db.jobs.get(key))) return 0;
 		const listings = await fetchUsListings();
 		if (listings.size === 0) return 0;
-		const known = new Set(
-			(await this.db.market.allSymbols()).filter((s) => s.exchange === "US").map((s) => s.symbol),
-		);
+		const known = new Set((await this.db.market.allSymbols()).filter((s) => s.exchange === "US").map((s) => s.symbol));
 		const relevant = new Map([...listings].filter(([symbol]) => known.has(symbol)));
 		const updated = await this.db.market.enrichSecurities("US", relevant);
 		await this.db.jobs.set(key, String(updated));
@@ -208,7 +206,10 @@ export class MarketService {
 	/** Fetch deeper history when we hold too little — at most once a day per symbol. */
 	private async ensureHistory(exchange: Exchange, symbol: string): Promise<PriceBar[]> {
 		const bars = await this.db.market.history(exchange, symbol);
-		if (bars.length >= MIN_HISTORY || (await this.db.jobs.get(`history:${exchange}:${symbol}`)) === isoDate(new Date())) {
+		if (
+			bars.length >= MIN_HISTORY ||
+			(await this.db.jobs.get(`history:${exchange}:${symbol}`)) === isoDate(new Date())
+		) {
 			return bars;
 		}
 		await this.loadHistory(symbol, { exchange }).catch((err) =>

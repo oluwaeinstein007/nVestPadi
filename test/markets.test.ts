@@ -5,7 +5,9 @@ import { normalizeUsSymbol } from "../src/markets/nasdaq.js";
 import { parseAfxChart } from "../src/markets/ngx.js";
 import { withChanges } from "../src/markets/types.js";
 import { usVenue } from "../src/markets/yahoo.js";
-import { makeBars, memoryDb, security, seed } from "./helpers.js";
+import { dropTestDatabases, makeBars, memoryDb, security, seed } from "./helpers.js";
+
+after(dropTestDatabases);
 
 describe("market data sources", () => {
 	it("parses afx chart history into daily bars with changes", async () => {
@@ -50,17 +52,17 @@ describe("listing metadata", () => {
 		assert.deepEqual([s?.name, s?.sector, s?.venue, s?.marketCap], ["Berkshire Hathaway", "Finance", "NYSE", 1e12]);
 		// A later sparse upsert (e.g. a history fetch) keeps the metadata.
 		await db.market.upsertSecurities([security("BRK-B", "Berkshire Hathaway Inc.", null, "US")]);
-		assert.equal(await db.market.getSecurity("US", "BRK-B")?.sector, "Finance");
-		assert.equal(await db.market.latestQuote("US", "BRK-B")?.venue, "NYSE");
+		assert.equal((await db.market.getSecurity("US", "BRK-B"))?.sector, "Finance");
+		assert.equal((await db.market.latestQuote("US", "BRK-B"))?.venue, "NYSE");
 	});
 
 	it("never replaces a real company name with a bare ticker", async () => {
 		const db = await memoryDb();
 		await db.market.upsertSecurities([security("CORNERST", "Cornerstone Insurance Company")]);
 		await db.market.upsertSecurities([security("CORNERST", "CORNERST")]); // e.g. the name lookup failed
-		assert.equal(await db.market.getSecurity("NGX", "CORNERST")?.name, "Cornerstone Insurance Company");
+		assert.equal((await db.market.getSecurity("NGX", "CORNERST"))?.name, "Cornerstone Insurance Company");
 		await db.market.upsertSecurities([security("CORNERST", "Cornerstone Insurance Plc")]);
-		assert.equal(await db.market.getSecurity("NGX", "CORNERST")?.name, "Cornerstone Insurance Plc");
+		assert.equal((await db.market.getSecurity("NGX", "CORNERST"))?.name, "Cornerstone Insurance Plc");
 	});
 
 	it("lists symbols that still need history", async () => {
