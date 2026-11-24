@@ -55,28 +55,31 @@ export class PortfolioService {
 		private readonly mode: AppMode,
 	) {}
 
-	get(user: User): Portfolio {
-		const positions: Position[] = this.db.holdings.list(user.id).map((h) => {
-			const quote = this.db.market.latestQuote(h.exchange, h.symbol);
-			const security = quote ?? this.db.market.getSecurity(h.exchange, h.symbol);
-			const cost = round(h.quantity * h.avgCost, 2);
-			const value = quote ? round(h.quantity * quote.close, 2) : null;
-			const pnl = value === null ? null : round(value - cost, 2);
-			return {
-				...h,
-				name: security?.name ?? h.symbol,
-				currency: security?.currency ?? "",
-				price: quote?.close ?? null,
-				priceDate: quote?.date ?? null,
-				changePct: quote?.changePct ?? null,
-				cost,
-				value,
-				pnl,
-				pnlPct: pnl !== null && cost > 0 ? round((pnl / cost) * 100, 2) : null,
-				dayPnl: quote?.change != null ? round(h.quantity * quote.change, 2) : null,
-				weightPct: null,
-			};
-		});
+	async get(user: User): Promise<Portfolio> {
+		const holdings = await this.db.holdings.list(user.id);
+		const positions: Position[] = await Promise.all(
+			holdings.map(async (h) => {
+				const quote = await this.db.market.latestQuote(h.exchange, h.symbol);
+				const security = quote ?? (await this.db.market.getSecurity(h.exchange, h.symbol));
+				const cost = round(h.quantity * h.avgCost, 2);
+				const value = quote ? round(h.quantity * quote.close, 2) : null;
+				const pnl = value === null ? null : round(value - cost, 2);
+				return {
+					...h,
+					name: security?.name ?? h.symbol,
+					currency: security?.currency ?? "",
+					price: quote?.close ?? null,
+					priceDate: quote?.date ?? null,
+					changePct: quote?.changePct ?? null,
+					cost,
+					value,
+					pnl,
+					pnlPct: pnl !== null && cost > 0 ? round((pnl / cost) * 100, 2) : null,
+					dayPnl: quote?.change != null ? round(h.quantity * quote.change, 2) : null,
+					weightPct: null,
+				};
+			}),
+		);
 
 		const totals = new Map<string, PortfolioTotals>();
 		for (const p of positions) {
@@ -118,18 +121,18 @@ export class PortfolioService {
 	): Promise<Holding> {
 		validate(input.quantity, input.avgCost);
 		const target = await this.market.track(input.symbol, input.exchange);
-		const existing = this.db.holdings.find(user.id, target.exchange, target.symbol);
+		const existing = await this.db.holdings.find(user.id, target.exchange, target.symbol);
 		if (existing) {
 			const quantity = existing.quantity + input.quantity;
 			const avgCost = (existing.quantity * existing.avgCost + input.quantity * input.avgCost) / quantity;
-			return this.db.holdings.update(user.id, existing.id, {
+			return (await this.db.holdings.update(user.id, existing.id, {
 				quantity: round(quantity, 8),
 				avgCost: round(avgCost, 6),
 				note: input.note,
-			}) as Holding;
+			})) as Holding;
 		}
 		const { holdings } = limitsFor(user, this.mode);
-		if (this.db.holdings.count(user.id) >= holdings) {
+		if ((await this.db.holdings.count(user.id)) >= holdings) {
 			throw new PlanLimitError(`Your plan tracks up to ${holdings} positions. Remove one or upgrade to Pro.`);
 		}
 		return this.db.holdings.insert(user.id, {
@@ -140,14 +143,18 @@ export class PortfolioService {
 		});
 	}
 
-	update(user: User, id: number, input: { quantity: number; avgCost: number; note?: string | null }): Holding {
+	async update(
+		user: User,
+		id: number,
+		input: { quantity: number; avgCost: number; note?: string | null },
+	): Promise<Holding> {
 		validate(input.quantity, input.avgCost);
-		const updated = this.db.holdings.update(user.id, id, input);
+		const updated = await this.db.holdings.update(user.id, id, input);
 		if (!updated) throw new NotFoundError("Position not found");
 		return updated;
 	}
 
-	remove(user: User, id: number) {
-		if (!this.db.holdings.delete(user.id, id)) throw new NotFoundError("Position not found");
+	async remove(user: User, id: number): Promise<void> {
+		if (!(await this.db.holdings.delete(user.id, id))) throw new NotFoundError("Position not found");
 	}
 }

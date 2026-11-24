@@ -135,7 +135,7 @@ export class BotService {
 			case "digest":
 				return this.digest(user, arg);
 			case "unlink":
-				this.app.db.users.update(user.id, { telegramChatId: null });
+				await this.app.db.users.update(user.id, { telegramChatId: null });
 				return "Disconnected. This chat won't receive your alerts or digests any more.";
 			default:
 				return `Unknown command /${command}. Send /help to see what I can do.`;
@@ -166,21 +166,21 @@ export class BotService {
 			: "Personal commands only work in a private Telegram chat linked to your nVestPadi account.";
 	}
 
-	private link(token: string, ctx: BotContext): string {
+	private async link(token: string, ctx: BotContext): Promise<string> {
 		if (ctx.platform !== "telegram" || !ctx.isPrivate || !ctx.chatId) {
 			return "Open the link from a private chat with the bot, not a group.";
 		}
-		const userId = this.app.db.users.consumeAuthToken(hashToken(token), "telegram-link");
+		const userId = await this.app.db.users.consumeAuthToken(hashToken(token), "telegram-link");
 		if (!userId) return "That link has expired. Generate a new one in Settings → Alert delivery.";
 		// One chat per account, and one account per chat.
-		const previous = this.app.db.users.byTelegramChat(ctx.chatId);
-		if (previous && previous.id !== userId) this.app.db.users.update(previous.id, { telegramChatId: null });
-		const user = this.app.db.users.update(userId, { telegramChatId: ctx.chatId });
+		const previous = await this.app.db.users.byTelegramChat(ctx.chatId);
+		if (previous && previous.id !== userId) await this.app.db.users.update(previous.id, { telegramChatId: null });
+		const user = await this.app.db.users.update(userId, { telegramChatId: ctx.chatId });
 		return `✅ Connected to **${user.email}**. Your alerts and daily digest will arrive here.\nTry /watchlist or /portfolio.`;
 	}
 
-	private market(exchange: Exchange): string {
-		const o = marketOverview(this.app.db, exchange, 5);
+	private async market(exchange: Exchange): Promise<string> {
+		const o = await marketOverview(this.app.db, exchange, 5);
 		if (o.count === 0) return `No ${MARKET_NAMES[exchange]} data yet.`;
 		const currency = exchange === "NGX" ? "NGN" : "USD";
 		const fmt = (list: typeof o.gainers) =>
@@ -238,8 +238,8 @@ export class BotService {
 	private async ask(question: string, ctx: BotContext): Promise<string> {
 		if (question.length < 3) return "Ask me something, e.g. /ask How did Nigerian banks trade today?";
 		if (!this.app.ai) return "AI answers aren't enabled on this server yet.";
-		let refund: () => void = () => undefined;
-		if (ctx.user) refund = this.app.accounts.meterAiQuestion(ctx.user);
+		let refund: () => Promise<void> = async () => undefined;
+		if (ctx.user) refund = await this.app.accounts.meterAiQuestion(ctx.user);
 		else {
 			try {
 				this.publicAsk(`${ctx.platform}:${ctx.chatKey}`);
@@ -254,13 +254,13 @@ export class BotService {
 			const sources = a.sources.length ? `\n\nSources: ${a.sources.map((s) => `[${s.n}] ${s.title}`).join("; ")}` : "";
 			return `${a.answer}${sources}\n\nInformation only, not investment advice.`;
 		} catch (err) {
-			refund();
+			await refund().catch(() => undefined);
 			throw err;
 		}
 	}
 
-	private watchlist(user: User): string {
-		const list = this.app.watchlists.list(user);
+	private async watchlist(user: User): Promise<string> {
+		const list = await this.app.watchlists.list(user);
 		if (list.length === 0) return `Your watchlist is empty. Add stocks at ${this.app.config.appUrl}/app`;
 		return [
 			"**Your watchlist**",
@@ -268,8 +268,8 @@ export class BotService {
 		].join("\n");
 	}
 
-	private portfolio(user: User): string {
-		const { positions, totals } = this.app.portfolio.get(user);
+	private async portfolio(user: User): Promise<string> {
+		const { positions, totals } = await this.app.portfolio.get(user);
 		if (positions.length === 0) return `No positions yet. Add them at ${this.app.config.appUrl}/app`;
 		return [
 			"**Your portfolio**",
@@ -284,8 +284,8 @@ export class BotService {
 		].join("\n");
 	}
 
-	private alerts(user: User): string {
-		const list = this.app.alerts.list(user);
+	private async alerts(user: User): Promise<string> {
+		const list = await this.app.alerts.list(user);
 		if (list.length === 0) return `No alerts yet. Create them at ${this.app.config.appUrl}/app`;
 		return [
 			"**Your alerts**",
@@ -293,9 +293,9 @@ export class BotService {
 		].join("\n");
 	}
 
-	private digest(user: User, arg: string): string {
+	private async digest(user: User, arg: string): Promise<string> {
 		const on = arg ? /^(on|yes|true|1)$/i.test(arg) : !user.dailyDigest;
-		this.app.db.users.update(user.id, { dailyDigest: on });
+		await this.app.db.users.update(user.id, { dailyDigest: on });
 		return on
 			? `Daily digest **on** — it arrives after the ${MARKET_NAMES[user.defaultExchange]} close.`
 			: "Daily digest **off**. Alerts still arrive as usual.";

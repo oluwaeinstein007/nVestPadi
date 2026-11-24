@@ -50,7 +50,7 @@ export class KnowledgeBase {
 		const { ai, vectors } = this.require("Indexing");
 		if (items.length === 0) return { indexed: 0, unchanged: 0 };
 
-		const existing = this.db.ledger.indexedHashes(items.map((i) => i.id));
+		const existing = await this.db.ledger.indexedHashes(items.map((i) => i.id));
 		const changed = items
 			.map((item) => ({ item, hash: sha256(item.text) }))
 			.filter(({ item, hash }) => existing.get(item.id) !== hash);

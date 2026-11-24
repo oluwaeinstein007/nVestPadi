@@ -11,7 +11,7 @@ export async function handleTelegramUpdate(app: App, update: TelegramUpdate): Pr
 	const chatId = String(msg.chat.id);
 	const isPrivate = msg.chat.type === "private";
 	// Personal data is only ever served in the private chat linked to the account.
-	const user = isPrivate ? app.db.users.byTelegramChat(chatId) : null;
+	const user = isPrivate ? await app.db.users.byTelegramChat(chatId) : null;
 	const reply = await app.bots.handleText(msg.text, { platform: "telegram", chatKey: chatId, isPrivate, user, chatId });
 	if (reply) await app.telegram.sendMessage(chatId, toTelegramHtml(reply));
 }
