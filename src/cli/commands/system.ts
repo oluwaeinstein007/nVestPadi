@@ -27,6 +27,7 @@ export const systemCommands: Record<string, Command> = {
 			if (every) {
 				scheduler.startSync(every, [...EXCHANGES]);
 				if (app.config.liveSyncMinutes < every) scheduler.startLiveSync(app.config.liveSyncMinutes);
+				scheduler.startDisclosures();
 			}
 			if (app.config.digests) scheduler.startDigests();
 			await scheduler.startTelegram();

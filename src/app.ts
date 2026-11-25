@@ -15,6 +15,7 @@ import { AuthService } from "./services/authService.js";
 import { BillingService } from "./services/billingService.js";
 import { BotService } from "./services/botService.js";
 import { DigestService } from "./services/digestService.js";
+import { DisclosureService } from "./services/disclosureService.js";
 import { InsightService } from "./services/insightService.js";
 import { KnowledgeBase } from "./services/knowledgeBase.js";
 import { LiveService } from "./services/liveService.js";
@@ -50,6 +51,8 @@ export interface App {
 	ledger: SignalLedger;
 	/** "How much should I buy?" from the stop distance and the risk the user accepts. */
 	sizing: SizingService;
+	/** NGX filings and dividends. */
+	disclosures: DisclosureService;
 	bots: BotService;
 	/** Server-wide Telegram bot, when TELEGRAM_BOT_TOKEN is set. */
 	telegram: TelegramClient | null;
@@ -104,6 +107,7 @@ export async function createApp(config: Config, overrides: { mailer?: Mailer } =
 
 	const ledger = new SignalLedger(db);
 	const sizing = new SizingService(db, market);
+	const disclosures = new DisclosureService(db, ai, (user) => accounts.meterAiQuestion(user));
 
 	for (const warning of config.warnings) logger.warn(warning);
 
@@ -127,6 +131,7 @@ export async function createApp(config: Config, overrides: { mailer?: Mailer } =
 		digests,
 		ledger,
 		sizing,
+		disclosures,
 		telegram,
 		// Assigned below: the bot needs the finished app.
 		bots: undefined as unknown as BotService,

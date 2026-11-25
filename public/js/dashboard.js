@@ -429,6 +429,7 @@ function renderSecurity({ report: r, history, watched, confidence }) {
 		${signalSection(r, cur, confidence)}
 		<h3>How much to buy?</h3>
 		${sizerSection(r)}
+		${s.exchange === "NGX" ? '<h3>Dividends</h3><div id="d-dividends"><div class="skeleton"></div></div><h3>Filings</h3><div id="d-filings"><div class="skeleton"></div></div>' : ""}
 		<h3>Indicators</h3>
 		<div class="indicators">
 			${ind("Trend", esc(r.trend), "From 20/50-day moving averages")}
@@ -545,6 +546,7 @@ function renderSecurity({ report: r, history, watched, confidence }) {
 	};
 	poll();
 
+	loadSecurityExtras(s).catch(() => undefined);
 	const sizer = $("#sizer");
 	sizer.addEventListener("submit", (e) => {
 		e.preventDefault();
@@ -652,6 +654,107 @@ function marketRecord(m) {
 		unclear: `<b class="down">not clearly better than ${random}</b>, so treat these as ideas to research, not recommendations.`,
 	}[m.verdict];
 	return `Across ${m.symbols} ${isCrypto() ? "coins" : "stocks"} here, ${m.trades} past ${m.side} signals ${what} after costs ${m.winRate}% of the time (${m.grossWinRate}% before costs): ${verdict}`;
+}
+
+// ---------------------------------------------------------------------------
+// Dividends & filings (NGX)
+// ---------------------------------------------------------------------------
+
+/** A calendar date (YYYY-MM-DD…) as "27 Nov 2026", the same day in every time zone. */
+const fmtDay = (iso) =>
+	iso
+		? new Date(`${iso.slice(0, 10)}T00:00:00Z`).toLocaleDateString(undefined, {
+				day: "numeric",
+				month: "short",
+				year: "numeric",
+				timeZone: "UTC",
+			})
+		: "—";
+
+const DIVIDEND_STATUS = { open: "buy by", qualified: "qualified", paid: "paid", unknown: "dates TBA" };
+const dividendAmount = (d) => `${d.currency === "NGN" ? "₦" : "$"}${fmtPrice(d.amount)}`;
+
+async function loadDividends() {
+	const card = $("#dividends-card");
+	card.hidden = state.exchange !== "NGX";
+	if (card.hidden) return;
+	const { events } = await api("/api/dividends?exchange=NGX");
+	// Still possible to qualify first (soonest deadline first), then announced or awaiting payment.
+	const order = { open: 0, unknown: 1, qualified: 2, paid: 3 };
+	const list = events.filter((e) => e.status !== "paid").sort((a, b) => order[a.status] - order[b.status]);
+	$("#dividends-count").textContent = list.length ? `${list.length} upcoming` : "";
+	$("#dividends").innerHTML = list.length
+		? list
+				.slice(0, 12)
+				.map(
+					(
+						d,
+					) => `<li><button type="button" data-open="NGX:${esc(d.symbol)}" title="${esc(`${d.kind} dividend of ${dividendAmount(d)} per share`)}">
+				<span class="sym"><span><b>${esc(d.symbol)}</b> <span class="muted small">${esc(d.kind)}</span></span><span class="name">${esc(d.name)}</span></span>
+				<span class="lv"><span>${dividendAmount(d)}${d.payoutYieldPct == null ? "" : ` <span class="muted small">${d.payoutYieldPct}%</span>`}</span><span class="muted small">${d.qualificationDate ? `qualify ${fmtDay(d.qualificationDate)} · paid ${d.paymentDate ? fmtDay(d.paymentDate) : "TBA"}` : "dates not announced"}</span></span>
+				<span class="rate ${d.status === "open" ? "good" : "none"}">${d.status === "open" ? `buy by ${fmtDay(d.buyBy)}` : DIVIDEND_STATUS[d.status]}</span>
+			</button></li>`,
+				)
+				.join("")
+		: '<li class="empty">No upcoming dividends on record right now.</li>';
+}
+
+async function loadSecurityExtras(s) {
+	if (s.exchange !== "NGX") return;
+	const [div, filings] = await Promise.allSettled([
+		api(`/api/securities/NGX/${encodeURIComponent(s.symbol)}/dividends`),
+		api(`/api/securities/NGX/${encodeURIComponent(s.symbol)}/filings?limit=10`),
+	]);
+	const dBox = $("#d-dividends");
+	if (dBox && div.status === "fulfilled") {
+		const d = div.value;
+		dBox.innerHTML = d.history.length
+			? `<div class="trade-plan">
+					<div><span>Past 12 months</span><b>${d.trailingCount ? `₦${fmtPrice(d.trailingAmount)}` : "—"}</b><small>${d.trailingCount} payout${d.trailingCount === 1 ? "" : "s"}</small></div>
+					<div><span>Trailing yield</span><b>${d.trailingYieldPct == null ? "—" : `${d.trailingYieldPct}%`}</b><small>at the latest price</small></div>
+					<div><span>Next</span><b>${d.next ? dividendAmount(d.next) : "—"}</b><small>${d.next ? (d.next.status === "open" ? `buy by ${fmtDay(d.next.buyBy)}` : DIVIDEND_STATUS[d.next.status]) : "none announced"}</small></div>
+					<div><span>Paid</span><b>${d.next?.paymentDate ? fmtDay(d.next.paymentDate) : "—"}</b><small>${d.next?.qualificationDate ? `qualify ${fmtDay(d.next.qualificationDate)}` : ""}</small></div>
+				</div>
+				<ul class="div-history">${d.history
+					.slice(0, 6)
+					.map(
+						(e) =>
+							`<li><span>${e.qualificationDate ? fmtDay(e.qualificationDate) : fmtDay(e.announcedAt.slice(0, 10))}</span><span>${esc(e.kind)}</span><b>${dividendAmount(e)}</b>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener" class="muted small">notice</a>` : ""}</li>`,
+					)
+					.join("")}</ul>`
+			: '<p class="muted small">No dividends on record in the past year of NGX notices.</p>';
+	}
+	const fBox = $("#d-filings");
+	if (fBox && filings.status === "fulfilled") {
+		fBox.innerHTML = filings.value.length
+			? `<ul class="filings">${filings.value
+					.map(
+						(f) => `<li data-id="${f.id}">
+					<div><span class="muted small">${fmtDay(f.publishedAt.slice(0, 10))} · ${esc(f.category || f.kind)}</span>
+					<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.title)}</a></div>
+					<p class="small summary">${f.summary ? esc(f.summary) : ""}</p>
+					${f.summary || f.scanned || !state.status?.features?.ai ? "" : '<button type="button" class="link small summarize">What changed? (AI)</button>'}
+				</li>`,
+					)
+					.join("")}</ul>`
+			: '<p class="muted small">No filings on record yet.</p>';
+		for (const b of $$(".summarize", fBox)) {
+			b.addEventListener("click", async () => {
+				const li = b.closest("li");
+				b.disabled = true;
+				b.textContent = "Reading the filing…";
+				try {
+					const f = await api(`/api/filings/${li.dataset.id}/summary`, { method: "POST" });
+					$(".summary", li).textContent = f.summary;
+					b.remove();
+				} catch (err) {
+					b.disabled = false;
+					b.textContent = "What changed? (AI)";
+					toastError(err);
+				}
+			});
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -885,7 +988,7 @@ async function refreshAccount() {
 
 async function refreshAll() {
 	const results = await Promise.allSettled([loadMarket(), loadWatchlist(), loadAlerts(), loadPortfolio()]);
-	await Promise.allSettled([loadScreen(), loadSignals()]);
+	await Promise.allSettled([loadScreen(), loadSignals(), loadDividends()]);
 	const failed = results.find((r) => r.status === "rejected");
 	if (failed && failed.reason.status !== 401) toastError(failed.reason);
 }

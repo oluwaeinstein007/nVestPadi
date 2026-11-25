@@ -1,6 +1,7 @@
 /** Market data, screener, security detail, watchlist and alerts. */
 import { z } from "zod";
 import { costsFor, roundTripPct } from "../../analysis/costs.js";
+import { SETTLEMENT_DAYS, dividendCalendar, dividendSummary } from "../../analysis/dividends.js";
 import { callConfidence, signalIdeas, signalSummary } from "../../analysis/ideas.js";
 import { SCREEN_SORTS, marketOverview, screen } from "../../analysis/market.js";
 import { MIN_TRADES, SIGNAL_DEFAULTS } from "../../analysis/signals.js";
@@ -158,6 +159,25 @@ export function marketRoutes(r: Router, app: App) {
 			})
 			.parse(queryObject(query));
 		return app.sizing.size(q);
+	});
+
+	// -- Dividends and filings (NGX) ----------------------------------------------------
+	r.get("/api/dividends", ({ query }) => {
+		const exchange = exchangeSchema.parse(query.get("exchange") ?? "NGX");
+		return dividendCalendar(app.db, exchange).then((events) => ({ events, settlementDays: SETTLEMENT_DAYS }));
+	});
+	r.get("/api/securities/:exchange/:symbol/dividends", (ctx) =>
+		dividendSummary(app.db, exchangeSchema.parse(ctx.params.exchange), (ctx.params.symbol as string).toUpperCase()),
+	);
+	r.get("/api/securities/:exchange/:symbol/filings", (ctx) =>
+		app.db.disclosures.forSymbol(
+			exchangeSchema.parse(ctx.params.exchange),
+			(ctx.params.symbol as string).toUpperCase(),
+			Math.min(50, Number(ctx.query.get("limit")) || 15),
+		),
+	);
+	r.post("/api/filings/:id/summary", (ctx) => app.disclosures.summarize(Number(ctx.params.id), ctx.user), {
+		limit: rateLimiter(20, 60_000),
 	});
 
 	// -- Watchlist ---------------------------------------------------------------------

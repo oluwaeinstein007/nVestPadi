@@ -9,6 +9,7 @@
  *
  * Replies use light markup (**bold**, `code`) that each adapter converts.
  */
+import { type DividendEvent, dividendCalendar, dividendSummary } from "../analysis/dividends.js";
 import { signalIdeas, signalSummary } from "../analysis/ideas.js";
 import { marketOverview } from "../analysis/market.js";
 import type { App } from "../app.js";
@@ -60,6 +61,11 @@ export const BOT_COMMANDS: BotCommand[] = [
 		name: "signals",
 		description: "Fresh buy/sell signals with stop, target and success rate",
 		arg: { name: "market", description: "ngx, us or crypto, optionally + sell", required: false },
+	},
+	{
+		name: "dividends",
+		description: "NGX dividend calendar, or a stock's dividends and yield",
+		arg: { name: "symbol", description: "optional, e.g. ZENITHBANK", required: false },
 	},
 	{
 		name: "size",
@@ -142,6 +148,8 @@ export class BotService {
 				return this.analyze(arg);
 			case "signals":
 				return this.signals(arg, ctx);
+			case "dividends":
+				return this.dividends(arg.trim().toUpperCase());
 			case "size":
 				return this.size(arg);
 			case "record":
@@ -302,6 +310,40 @@ export class BotService {
 			.filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "")
 			.join("\n")
 			.trim();
+	}
+
+	/** "/dividends": upcoming NGX payouts you can still qualify for; "/dividends MTNN": one stock's record. */
+	private async dividends(symbol: string): Promise<string> {
+		const line = (d: DividendEvent) => {
+			const amount = `${d.currency === "NGN" ? "₦" : "$"}${d.amount}`;
+			const yieldText = d.payoutYieldPct === null ? "" : ` (${d.payoutYieldPct}%)`;
+			const dates = d.qualificationDate
+				? `buy by ${d.buyBy}, qualify ${d.qualificationDate}, paid ${d.paymentDate ?? "TBA"}`
+				: "dates not announced";
+			return `${amount} ${d.kind}${yieldText} · ${dates}`;
+		};
+		if (symbol) {
+			const s = await dividendSummary(this.app.db, "NGX", symbol);
+			if (!s.history.length) return `No dividends on record for ${symbol} (NGX notices since about a year ago).`;
+			return [
+				`**${symbol} dividends**`,
+				s.trailingCount
+					? `Past 12 months: ₦${s.trailingAmount} per share${s.trailingYieldPct === null ? "" : ` · yield ${s.trailingYieldPct}%`}`
+					: "",
+				s.next ? `Next: ${line(s.next)}` : "No upcoming payout announced.",
+				"",
+				...s.history.slice(0, 5).map((d) => `• ${d.qualificationDate ?? d.announcedAt.slice(0, 10)}: ${line(d)}`),
+			]
+				.filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "")
+				.join("\n");
+		}
+		const open = (await dividendCalendar(this.app.db, "NGX")).filter((d) => d.status === "open").slice(0, 10);
+		return [
+			"**NGX dividends you can still qualify for**",
+			...(open.length ? open.map((d) => `🟢 **${d.symbol}** ${line(d)}`) : ["None open right now."]),
+			"",
+			"Buy by = 2 trading days before qualification (T+2), holidays not counted: confirm with your broker. /dividends SYMBOL for one stock.",
+		].join("\n");
 	}
 
 	/** "/size GTCO 1000000 1": units to buy so a stop-out costs 1% of ₦1m, using the current BUY signal's stop. */

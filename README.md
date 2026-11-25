@@ -86,9 +86,11 @@ Limits live in [`src/services/plans.ts`](src/services/plans.ts). A test keeps th
 | 💼 **Portfolio** | Positions with average cost, live value, today's and total P&L, and weights, per currency (NGN and USD are never mixed) |
 | 🟩 **Heatmap & charts** | Most-traded names sized by value and coloured by move; candlestick or line chart with 1D (5-minute) to 2Y ranges, SMA overlays, volume and past-signal markers |
 | ⚡ **Live prices** | While a market is open, `serve` re-syncs it every `LIVE_SYNC_MINUTES` (default 5), and the stock view polls a near-live price for US stocks and crypto. NGX is delayed (no free intraday feed) |
+| 💰 **Dividends (NGX)** | A dividend calendar with buy-by, qualification and payment dates, each payout's yield, every company's payout history and trailing 12-month yield, read from companies' own dividend notices to NGX. On the dashboard and stock panel, `nvest dividends [SYMBOL]` and `/dividends` |
+| 📄 **Company filings (NGX)** | Every NGX filing (results, corporate actions, directors' dealings, board and AGM notices) per company with its PDF, plus a one-click AI summary of what changed (cached and shared; generating one counts as an AI question). `nvest filings SYMBOL` |
 | 📏 **Position sizing** | "How much should I buy?": units sized so hitting the stop loses a chosen share of your capital (default 1%), fees included, capped at 25% of capital per position, with warnings when a stock trades too thinly to exit at the stop. Uses the BUY signal's stop and target or your own. In the stock drawer, `nvest size` and `/size` |
 | 🔔 **Alerts** | `above`, `below`, `change-above`, `change-below`, `rsi-above`, `rsi-below`, `volume-spike`, `signal-buy`, `signal-sell` (threshold = minimum past success rate); one digest per user per sync; re-arm after firing |
-| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/signals`, `/size`, `/record`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
+| 🤖 **Telegram & Discord bots** | `/market`, `/quote`, `/analyze`, `/signals`, `/dividends`, `/size`, `/record`, `/ask` for everyone; `/watchlist`, `/portfolio`, `/alerts`, `/digest` in a linked Telegram DM |
 | 📰 **Daily digests** | Market wrap-ups to a Telegram channel and Discord webhook; personal digests built only from each user's own data |
 | 💬 **Ask AI** | Answers grounded in live reports, market breadth and the research library, with numbered citations |
 | 📄 **Research library** | Annual-report PDFs, HTML, CSV, JSON, Markdown, or whole websites (robots.txt-aware), added by the operator with `nvest ingest` |
@@ -201,6 +203,8 @@ To run the tests against a real Postgres: `TEST_DATABASE_URL=postgres://postgres
 | `analyze <SYM>` | Full technical report |
 | `market` | Breadth, movers, sectors. `--exchange NGX\|US\|CRYPTO` `--top N` |
 | `signals` | Fresh buy/sell signals with stop, target, chance of profit and past record; evidence-backed first. `--exchange` `--side BUY\|SELL` `--all` |
+| `dividends` | NGX dividend calendar, or one stock's payouts and trailing yield. `--sync` fetches new NGX filings first |
+| `filings` | A company's latest NGX filings with PDF links and any AI summaries. `--limit 15` |
 | `size` | Units to buy so a stop-out loses `--risk` % (default 1) of `--capital`, after fees; `--stop`/`--entry`/`--target` override the signal's levels, `--max-position` caps one position (default 25%) |
 | `record` | Live track record: every logged signal, how it played out after costs, and whether the stated chances came true. `--exchange` `--recent 15` |
 | `screen` | Screener. `--sector` `--search` `--sort` `--min-price` `--max-price` `--rsi-below` `--rsi-above` `--limit` |
@@ -259,6 +263,10 @@ curl -H "Authorization: Bearer nvp_…" https://app.yourdomain.com/api/watchlist
 |---|---|---|---|
 | GET | `/api/health` | public | Liveness |
 | GET | `/api/public/snapshot?exchange=NGX` | public | Cached breadth + top movers (landing page) |
+| GET | `/api/dividends?exchange=NGX` | user | Dividend calendar: payouts from two weeks ago onwards, with buy-by date, payout yield and status |
+| GET | `/api/securities/:exchange/:symbol/dividends` | user | Payout history, trailing 12-month amount and yield, next dividend |
+| GET | `/api/securities/:exchange/:symbol/filings?limit=15` | user | Latest NGX filings with PDF links and cached summaries |
+| POST | `/api/filings/:id/summary` | user | AI "what changed" summary of a filing (generated once, then cached for everyone) |
 | GET | `/api/sizing?symbol=GTCO&capital=1000000&riskPct=1&stop=` | user | Position size for the current BUY signal or given levels: units, outlay, loss at stop, gain at target, liquidity warnings |
 | GET | `/api/public/track-record?exchange=NGX` | public | Live record of logged signals, calibration of stated chances, recent signals (levels of open ones withheld) |
 | GET | `/api/auth/session` | public | Current user (or null), mode, sign-up status, plans |
@@ -322,6 +330,13 @@ SQLite is the source of truth for prices, accounts and user data. Qdrant only st
 - **Chance of profit and confidence:** one stock rarely has more than a few past signals, so its own record is blended with the rule's record across the market (worth 10 trades) and with live results ([`src/analysis/confidence.ts`](src/analysis/confidence.ts)). The result is an estimated chance with a 90% range. Confidence is **high** when the whole range is above a random entry, **medium** when the estimate is above it but the range overlaps, **low** otherwise.
 - **Self-correcting, not self-tuning:** as logged signals finish, live outcomes feed the market-wide starting point (after 50 live results they weigh as much as the backtest), so the stated chances drift toward what is actually happening. The rules themselves are not re-fitted automatically: tuning on a few dozen live trades fits noise. Change them only after a fresh out-of-sample test; a new rule set gets a new `SIGNAL_RULE` id and starts a fresh live record.
 - **Why these rules:** four rule sets were replayed on ~10 years of 24 large NGX stocks, 17 US stocks and 10 coins, chosen on data before Nov 2023 and checked on the three years after. Only NGX breakout BUYs beat a random entry in both periods (≈58–61% of trades profitable vs ≈47–49%). The previous indicator vote did no better than chance anywhere, and US, crypto and SELL signals showed no reliable edge with any rule set. Breakouts on thinly traded NGX small caps also do poorly. That's why each idea carries its own record, the market-wide record is shown next to a random entry, and only evidence-backed ideas are listed by default.
+
+### NGX filings and dividends
+
+- **Source:** NGX's own document library (doclib.ngxgroup.com), which is free and public: the list behind ngxgroup.com's Corporate Disclosures pages (every filing with its PDF, ISIN and time), and the company directory to map ISINs to tickers ([`src/markets/ngxDisclosures.ts`](src/markets/ngxDisclosures.ts)).
+- **Sync:** every 30 minutes while `serve --sync-every` runs, or `nvest dividends --sync`. The first sync goes back ~13 months; later ones fetch only what's new. Up to 80 notice PDFs are read per sync, so the first backlog takes a few syncs.
+- **Dividends:** read from notices that follow NGX's template ("Proposed Dividend … Closure of Register … Qualification Date … Payment Date"), including kobo/naira/US-cent amounts and common typos. Scanned notices have no text and are kept as links. Some companies (several large banks this year) only state dividends inside their full results, which aren't parsed yet, so the calendar isn't complete.
+- **Buy by** is two trading days before the qualification date (T+2 settlement), with public holidays not counted. **Trailing yield** = naira payouts that qualified in the past 12 months ÷ latest price; dollar dividends are listed but excluded.
 
 ### Live track record
 

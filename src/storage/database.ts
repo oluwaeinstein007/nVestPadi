@@ -7,6 +7,7 @@ import type { DatabaseConfig } from "../config.js";
 import type { Dialect, Param, Row, SqlDriver } from "./driver.js";
 import { PostgresDriver } from "./postgresDriver.js";
 import { AlertRepository } from "./repositories/alerts.js";
+import { DisclosureRepository } from "./repositories/disclosures.js";
 import { HoldingsRepository } from "./repositories/holdings.js";
 import { JobStateRepository } from "./repositories/jobState.js";
 import { KnowledgeLedger } from "./repositories/knowledge.js";
@@ -30,6 +31,7 @@ export class Database {
 	readonly holdings = new HoldingsRepository(this);
 	readonly jobs = new JobStateRepository(this);
 	readonly signals = new SignalLogRepository(this);
+	readonly disclosures = new DisclosureRepository(this);
 	private closed = false;
 
 	private constructor(private readonly driver: SqlDriver) {}

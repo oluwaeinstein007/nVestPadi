@@ -4,6 +4,7 @@
  * - faster "live" syncs of each market while it's open
  * - history backfill for symbols with too little data, after each sync
  * - daily digests (checked every minute, idempotent per day)
+ * - NGX filings and dividends (every 30 minutes)
  * - Telegram bot delivery: webhook when APP_URL is https and a secret is set,
  *   otherwise long polling
  */
@@ -105,6 +106,26 @@ export class Scheduler {
 		};
 		this.timers.push(setInterval(() => void tick(), 60_000));
 		logger.info("scheduler: daily digests enabled");
+	}
+
+	/** Fetch new NGX filings and read dividend notices now and every `everyMinutes`. */
+	startDisclosures(everyMinutes = 30) {
+		let running = false;
+		const tick = async () => {
+			if (running) return;
+			running = true;
+			try {
+				const r = await this.app.disclosures.sync();
+				if (r.fetched || r.dividendsFound) logger.info("NGX filings synced", { ...r });
+			} catch (err) {
+				logger.warn("NGX filings sync failed", { error: errorMessage(err) });
+			} finally {
+				running = false;
+			}
+		};
+		void tick();
+		this.timers.push(setInterval(() => void tick(), everyMinutes * 60_000));
+		logger.info(`scheduler: NGX filings and dividends every ${everyMinutes} min`);
 	}
 
 	/** Connect the Telegram bot (webhook or polling). */

@@ -1,3 +1,4 @@
+import { dividendCalendar } from "../analysis/dividends.js";
 /**
  * Daily digests.
  *
@@ -153,6 +154,19 @@ export class DigestService {
 			return `${s.side === "BUY" ? "🟢" : "🔴"} ${s.side} ${s.symbol}${what}${record}`;
 		});
 		if (signalLines.length) paragraphs.push(`**New signals**\n${signalLines.join("\n")}`);
+
+		// NGX dividends on stocks the user holds or watches that they can still qualify for, or that pay soon.
+		const mine = new Set([...held, ...(await this.watchlists.list(user)).map((w) => `${w.exchange}:${w.symbol}`)]);
+		const dividendLines = (await dividendCalendar(this.db, "NGX", { today: day, pastDays: 0 }))
+			.filter((d) => mine.has(`NGX:${d.symbol}`) && (d.status === "open" || d.status === "qualified"))
+			.slice(0, 6)
+			.map((d) => {
+				const amount = `${d.currency === "NGN" ? "₦" : "$"}${d.amount}`;
+				const when =
+					d.status === "open" ? `buy by ${d.buyBy} to qualify` : `qualified · paid ${d.paymentDate ?? "date TBA"}`;
+				return `💰 ${d.symbol} ${amount} ${d.kind} dividend — ${when}${held.has(`NGX:${d.symbol}`) ? " (you hold it)" : ""}`;
+			});
+		if (dividendLines.length) paragraphs.push(`**Dividends**\n${dividendLines.join("\n")}`);
 
 		const alerts = await this.db.alerts.listForUser(user.id);
 		const firedToday = alerts.filter((a) => a.triggeredAt?.startsWith(day));

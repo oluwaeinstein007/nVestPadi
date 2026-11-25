@@ -202,4 +202,44 @@ export const POSTGRES_MIGRATIONS: string[] = [
 	CREATE INDEX idx_signal_log_status ON signal_log (status, exchange);
 	CREATE INDEX idx_signal_log_logged ON signal_log (logged_at);
 	`,
+
+	// 3 — v3.5: NGX disclosures and dividends (SQLite migration 5)
+	`
+	CREATE TABLE disclosures (
+		id                  BIGINT PRIMARY KEY,
+		exchange            TEXT NOT NULL,
+		symbol              TEXT,
+		isin                TEXT NOT NULL,
+		kind                TEXT NOT NULL,
+		category            TEXT NOT NULL,
+		company             TEXT NOT NULL,
+		title               TEXT NOT NULL,
+		url                 TEXT NOT NULL,
+		published_at        TEXT NOT NULL,
+		dividend_checked_at TEXT,
+		scanned             INTEGER NOT NULL DEFAULT 0,
+		summary             TEXT,
+		summarized_at       TEXT
+	);
+	CREATE INDEX idx_disclosures_symbol ON disclosures (exchange, symbol, published_at);
+	CREATE INDEX idx_disclosures_published ON disclosures (published_at);
+
+	CREATE TABLE dividends (
+		disclosure_id      BIGINT PRIMARY KEY REFERENCES disclosures (id) ON DELETE CASCADE,
+		exchange           TEXT NOT NULL,
+		symbol             TEXT NOT NULL,
+		kind               TEXT NOT NULL,
+		amount             DOUBLE PRECISION NOT NULL,
+		currency           TEXT NOT NULL,
+		qualification_date TEXT,
+		closure_start      TEXT,
+		closure_end        TEXT,
+		payment_date       TEXT,
+		agm_date           TEXT,
+		bonus              TEXT,
+		announced_at       TEXT NOT NULL
+	);
+	CREATE INDEX idx_dividends_symbol ON dividends (exchange, symbol, qualification_date);
+	CREATE INDEX idx_dividends_qualification ON dividends (qualification_date);
+	`,
 ];

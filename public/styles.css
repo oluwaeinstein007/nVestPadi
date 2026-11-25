@@ -1012,6 +1012,47 @@ table.data .sym span {
 	margin-top: 6px;
 }
 
+/* Dividends and filings in the security drawer */
+.div-history,
+.filings {
+	list-style: none;
+	margin: 8px 0 18px;
+	padding: 0;
+	display: grid;
+	gap: 4px;
+}
+.div-history li {
+	display: grid;
+	grid-template-columns: 110px 1fr auto auto;
+	gap: 10px;
+	align-items: baseline;
+	font-size: 13px;
+	padding: 4px 0;
+	border-bottom: 1px solid var(--border);
+	font-variant-numeric: tabular-nums;
+}
+.filings li {
+	padding: 8px 0;
+	border-bottom: 1px solid var(--border);
+}
+.filings li > div {
+	display: grid;
+	gap: 2px;
+}
+.filings a {
+	color: var(--text);
+	font-size: 14px;
+}
+.filings .summary:empty {
+	display: none;
+}
+.filings .summary {
+	margin: 6px 0 0;
+}
+.filings .summarize {
+	margin-top: 4px;
+}
+
 /* Position sizer in the security drawer */
 .sizer {
 	display: grid;

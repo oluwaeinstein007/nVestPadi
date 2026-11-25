@@ -1,4 +1,5 @@
-/** Market data commands: sync, history, quote, analyze, signals, size, record, market, screen. */
+/** Market data commands: sync, history, quote, analyze, signals, size, dividends, filings, record, market, screen. */
+import { type DividendEvent, dividendCalendar, dividendSummary } from "../../analysis/dividends.js";
 import { signalIdeas, signalSummary } from "../../analysis/ideas.js";
 import { SCREEN_SORTS, type ScreenSort, marketOverview, screen } from "../../analysis/market.js";
 import { parseExchange } from "../../markets/types.js";
@@ -319,6 +320,73 @@ export const marketCommands: Record<string, Command> = {
 			);
 		},
 	},
+	dividends: {
+		usage: "dividends [SYMBOL] [--sync]",
+		summary: "NGX dividend calendar (buy-by, qualification and payment dates, yields), or one stock's payout history",
+		options: { sync: { type: "boolean" } },
+		async run(app, args, flags, json) {
+			if (flags.sync) {
+				const r = await app.disclosures.sync();
+				if (!json)
+					out(
+						c.dim(
+							`  ${r.fetched} filings fetched · ${r.noticesRead} dividend notices read · ${r.dividendsFound} dividends · ${r.scanned} scanned`,
+						),
+					);
+			}
+			const today = new Date().toISOString().slice(0, 10);
+			if (args[0]) {
+				const symbol = args[0].toUpperCase();
+				const d = await dividendSummary(app.db, "NGX", symbol, today);
+				if (json) return d;
+				out(
+					heading(
+						`NGX:${symbol} dividends`,
+						d.history.length ? `${d.history.length} payouts on record` : "none on record",
+					),
+				);
+				out(
+					kv([
+						[
+							"Past 12 months",
+							d.trailingCount ? `₦${d.trailingAmount} per share in ${d.trailingCount} payout(s)` : "—",
+						],
+						["Trailing yield", d.trailingYieldPct === null ? "—" : `${d.trailingYieldPct}%`],
+						["Next", d.next ? describeDividend(d.next) : "none announced"],
+					]),
+				);
+				if (d.history.length) out(`\n${dividendTable(d.history)}`);
+				return;
+			}
+			const events = await dividendCalendar(app.db, "NGX", { today });
+			if (json) return events;
+			out(heading("NGX dividend calendar", `${events.length} payouts`));
+			out(events.length ? dividendTable(events, true) : c.dim("  None on record yet. Run with --sync."));
+			out(
+				c.dim(
+					"\n  Buy by = two trading days before qualification (T+2 settlement; holidays not counted), so check with your broker.",
+				),
+			);
+		},
+	},
+	filings: {
+		usage: "filings <SYMBOL> [--limit 15]",
+		summary: "Latest NGX filings for a company: results, corporate actions, directors' dealings, with PDF links",
+		options: { limit: { type: "string" } },
+		async run(app, args, flags, json) {
+			const symbol = args[0]?.toUpperCase();
+			if (!symbol) throw new UsageError("Usage: nvest filings GTCO");
+			const list = await app.db.disclosures.forSymbol("NGX", symbol, num(flags.limit, "limit") ?? 15);
+			if (json) return list;
+			out(heading(`NGX:${symbol} filings`, `${list.length} latest`));
+			for (const d of list) {
+				out(`  ${c.dim(d.publishedAt.slice(0, 10))}  ${c.bold(d.category || d.kind)}  ${d.title}`);
+				if (d.summary) out(`              ${d.summary}`);
+				out(`              ${c.dim(d.url)}`);
+			}
+			if (!list.length) out(c.dim("  None on record. Run `nvest dividends --sync` to fetch NGX filings."));
+		},
+	},
 	record: {
 		usage: "record [--exchange NGX|US|CRYPTO] [--recent 15]",
 		summary: "Live track record: every signal shown since launch and how it played out after costs",
@@ -476,3 +544,34 @@ export const marketCommands: Record<string, Command> = {
 		},
 	},
 };
+
+const STATUS: Record<DividendEvent["status"], string> = {
+	open: "buy by",
+	qualified: "qualified",
+	paid: "paid",
+	unknown: "dates TBA",
+};
+
+function describeDividend(d: DividendEvent): string {
+	const money = `${d.currency === "NGN" ? "₦" : "$"}${d.amount}`;
+	const dates = d.qualificationDate
+		? `qualify ${d.qualificationDate} (buy by ${d.buyBy}), paid ${d.paymentDate ?? "TBA"}`
+		: "dates not announced";
+	return `${money} ${d.kind}${d.payoutYieldPct === null ? "" : ` (${d.payoutYieldPct}%)`} · ${dates}`;
+}
+
+function dividendTable(events: DividendEvent[], withSymbol = false): string {
+	return table(events, [
+		...(withSymbol ? [{ header: "Symbol", value: (d: DividendEvent) => c.bold(d.symbol) }] : []),
+		{ header: "Kind", value: (d) => d.kind },
+		{ header: "Amount", value: (d) => `${d.currency === "NGN" ? "₦" : "$"}${d.amount}`, align: "right" },
+		{ header: "Yield", value: (d) => (d.payoutYieldPct === null ? "—" : `${d.payoutYieldPct}%`), align: "right" },
+		{ header: "Buy by", value: (d) => d.buyBy ?? "—" },
+		{ header: "Qualify", value: (d) => d.qualificationDate ?? "—" },
+		{ header: "Paid", value: (d) => d.paymentDate ?? "—" },
+		{
+			header: "Status",
+			value: (d) => (d.status === "open" ? c.green(STATUS[d.status]) : c.dim(STATUS[d.status])),
+		},
+	]);
+}

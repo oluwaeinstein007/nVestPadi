@@ -1,5 +1,13 @@
 # Upgrading
 
+## v3.4 → v3.5 (NGX dividends and filings)
+
+Migrates automatically (SQLite schema 5, PostgreSQL 3: adds `disclosures` and `dividends`).
+
+- **NGX filings and dividends** come from NGX's document library: `/api/dividends`, `/api/securities/:exchange/:symbol/{dividends,filings}`, `POST /api/filings/:id/summary`, `nvest dividends`, `nvest filings`, `/dividends`, a dividend calendar card and stock panel sections.
+- **`serve --sync-every` now also syncs NGX filings every 30 minutes.** The first run backfills ~13 months (about 4,000 filings) and reads dividend notices 80 per sync.
+- AI summaries of filings count as one AI question when first generated, then are cached for everyone.
+
 ## v3.3 → v3.4 (position sizing)
 
 No migration.
