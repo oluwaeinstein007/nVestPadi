@@ -1,5 +1,14 @@
 # Upgrading
 
+## v3.5 → v3.6 (fuller dividend coverage)
+
+Migrates automatically (SQLite schema 6, PostgreSQL 4: adds `disclosures.transcribed_at`).
+
+- **More dividends found:** AGM notices and full-year/half-year results are now read too (results only for a board's proposed dividend, shown as "dates TBA" until a dated notice arrives). Existing installs read their past AGM notices and results on the next syncs.
+- **Scanned notices are transcribed by the AI model** when `AI_PROVIDER` is set, including scans found earlier. This uses the model's PDF input (Gemini or OpenAI); a model error pauses it for 6 hours.
+- `AIProvider` has a new `readPdf()` method; custom providers need to implement it.
+- Repeat announcements of one payout now merge by amount (not kind), unless both carry qualification dates weeks apart.
+
 ## v3.4 → v3.5 (NGX dividends and filings)
 
 Migrates automatically (SQLite schema 5, PostgreSQL 3: adds `disclosures` and `dividends`).

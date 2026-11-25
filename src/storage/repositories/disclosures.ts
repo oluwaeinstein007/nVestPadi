@@ -42,6 +42,8 @@ export interface Dividend {
 }
 
 const REPEAT_WINDOW_MS = 120 * 86_400_000;
+/** Amended notices move dates by days, not months. */
+const SAME_DATES_MS = 21 * 86_400_000;
 
 /** Filings and the dividends read from them. */
 export class DisclosureRepository {
@@ -105,15 +107,30 @@ export class DisclosureRepository {
 		return str((await this.db.get("SELECT MAX(published_at) AS m FROM disclosures WHERE exchange = ?", [exchange]))?.m);
 	}
 
-	/** Corporate actions not yet checked for a dividend, newest first. */
-	async uncheckedCorporateActions(exchange: Exchange, limit: number): Promise<Disclosure[]> {
+	/** Filings of listed companies not yet checked for a dividend, newest first. */
+	async unchecked(exchange: Exchange, limit: number): Promise<Disclosure[]> {
 		const rows = await this.db.all(
 			`SELECT * FROM disclosures
-			 WHERE exchange = ? AND kind = 'corporate-action' AND dividend_checked_at IS NULL AND symbol IS NOT NULL
+			 WHERE exchange = ? AND dividend_checked_at IS NULL AND symbol IS NOT NULL
 			 ORDER BY published_at DESC LIMIT ?`,
 			[exchange, limit],
 		);
 		return rows.map(toDisclosure);
+	}
+
+	/** Scanned filings of listed companies an AI model hasn't transcribed yet, newest first. */
+	async untranscribedScans(exchange: Exchange, limit: number): Promise<Disclosure[]> {
+		const rows = await this.db.all(
+			`SELECT * FROM disclosures
+			 WHERE exchange = ? AND scanned = 1 AND transcribed_at IS NULL AND symbol IS NOT NULL
+			 ORDER BY published_at DESC LIMIT ?`,
+			[exchange, limit],
+		);
+		return rows.map(toDisclosure);
+	}
+
+	async markTranscribed(id: number): Promise<void> {
+		await this.db.run("UPDATE disclosures SET transcribed_at = ? WHERE id = ?", [timestamp(), id]);
 	}
 
 	async markChecked(id: number, scanned: boolean): Promise<void> {
@@ -191,22 +208,29 @@ export class DisclosureRepository {
 			 ORDER BY COALESCE(v.qualification_date, substr(v.announced_at, 1, 10)) DESC, v.announced_at DESC`,
 			params,
 		);
-		// Reminders, corrections and amended dates repeat a payout: same security, kind and amount announced within
-		// a few months. Keep the one with the latest dates.
+		// One payout is often announced several times: proposed in the results, dated in the AGM notice or a
+		// corporate action, then reminded or amended. Same security and amount within a few months is the same payout
+		// unless both have qualification dates weeks apart (e.g. equal quarterly dividends). Rows come dated-first, so
+		// the version with dates is the one kept.
 		const kept = new Map<string, Dividend[]>();
 		const out: Dividend[] = [];
 		for (const r of rows) {
 			const d = toDividend(r);
-			const key = `${d.symbol}|${d.kind}|${d.amount}`;
+			const key = `${d.symbol}|${d.currency}|${d.amount}`;
 			const same = kept.get(key) ?? [];
-			if (same.some((k) => Math.abs(Date.parse(k.announcedAt) - Date.parse(d.announcedAt)) <= REPEAT_WINDOW_MS))
-				continue;
+			if (same.some((k) => samePayout(k, d))) continue;
 			kept.set(key, [...same, d]);
 			out.push(d);
 			if (out.length >= limit) break;
 		}
 		return out;
 	}
+}
+
+function samePayout(a: Dividend, b: Dividend): boolean {
+	if (Math.abs(Date.parse(a.announcedAt) - Date.parse(b.announcedAt)) > REPEAT_WINDOW_MS) return false;
+	if (!a.qualificationDate || !b.qualificationDate) return true;
+	return Math.abs(Date.parse(a.qualificationDate) - Date.parse(b.qualificationDate)) <= SAME_DATES_MS;
 }
 
 function toDisclosure(r: Row): Disclosure {

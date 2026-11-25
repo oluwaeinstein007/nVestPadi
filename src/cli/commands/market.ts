@@ -330,7 +330,7 @@ export const marketCommands: Record<string, Command> = {
 				if (!json)
 					out(
 						c.dim(
-							`  ${r.fetched} filings fetched · ${r.noticesRead} dividend notices read · ${r.dividendsFound} dividends · ${r.scanned} scanned`,
+							`  ${r.fetched} filings fetched · ${r.noticesRead} read · ${r.dividendsFound} dividends · ${r.scanned} scanned · ${r.transcribed} transcribed`,
 						),
 					);
 			}

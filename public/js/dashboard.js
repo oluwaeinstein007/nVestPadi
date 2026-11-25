@@ -733,7 +733,7 @@ async function loadSecurityExtras(s) {
 					<div><span class="muted small">${fmtDay(f.publishedAt.slice(0, 10))} · ${esc(f.category || f.kind)}</span>
 					<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.title)}</a></div>
 					<p class="small summary">${f.summary ? esc(f.summary) : ""}</p>
-					${f.summary || f.scanned || !state.status?.features?.ai ? "" : '<button type="button" class="link small summarize">What changed? (AI)</button>'}
+					${f.summary || !state.status?.features?.ai ? "" : '<button type="button" class="link small summarize">What changed? (AI)</button>'}
 				</li>`,
 					)
 					.join("")}</ul>`

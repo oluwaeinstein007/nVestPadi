@@ -23,6 +23,9 @@ class StubAI implements AIProvider {
 		this.lastPrompt = messages;
 		return "GTCO closed higher [1].";
 	}
+	async readPdf() {
+		return "";
+	}
 }
 
 class StubVectors {

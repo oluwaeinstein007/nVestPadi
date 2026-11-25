@@ -335,7 +335,11 @@ SQLite is the source of truth for prices, accounts and user data. Qdrant only st
 
 - **Source:** NGX's own document library (doclib.ngxgroup.com), which is free and public: the list behind ngxgroup.com's Corporate Disclosures pages (every filing with its PDF, ISIN and time), and the company directory to map ISINs to tickers ([`src/markets/ngxDisclosures.ts`](src/markets/ngxDisclosures.ts)).
 - **Sync:** every 30 minutes while `serve --sync-every` runs, or `nvest dividends --sync`. The first sync goes back ~13 months; later ones fetch only what's new. Up to 80 notice PDFs are read per sync, so the first backlog takes a few syncs.
-- **Dividends:** read from notices that follow NGX's template ("Proposed Dividend … Closure of Register … Qualification Date … Payment Date"), including kobo/naira/US-cent amounts and common typos. Scanned notices have no text and are kept as links. Some companies (several large banks this year) only state dividends inside their full results, which aren't parsed yet, so the calendar isn't complete.
+- **Dividends** come from three kinds of filing:
+  - corporate-action notices in NGX's template ("Proposed Dividend … Closure of Register … Qualification Date … Payment Date"), including kobo/naira/US-cent amounts and common typos;
+  - AGM notices, which state the final dividend and its dates in prose ("…will be paid on May 5, 2026, to shareholders … at the close of business on April 24, 2026");
+  - full-year and half-year results (first 12 pages), where the board proposes a dividend ("proposed a final dividend of N8.75") before its dates are set. These show as "dates TBA" and merge into the dated notice when it arrives.
+- **Scanned notices** (~13%) have no text. With an AI provider configured, the model transcribes them (up to 20 per sync) and the same parser reads the transcript; scans stay queued until that works, and transcription pauses for 6 hours after a model error such as a spending cap. Without AI they're kept as links.
 - **Buy by** is two trading days before the qualification date (T+2 settlement), with public holidays not counted. **Trailing yield** = naira payouts that qualified in the past 12 months ÷ latest price; dollar dividends are listed but excluded.
 
 ### Live track record

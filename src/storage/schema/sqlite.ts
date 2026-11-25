@@ -247,4 +247,9 @@ export const SQLITE_MIGRATIONS: string[] = [
 	CREATE INDEX idx_dividends_symbol ON dividends (exchange, symbol, qualification_date);
 	CREATE INDEX idx_dividends_qualification ON dividends (qualification_date);
 	`,
+
+	// 6 — v3.6: scanned filings transcribed by an AI model (retried until done, independently of the dividend check)
+	`
+	ALTER TABLE disclosures ADD COLUMN transcribed_at TEXT;
+	`,
 ];

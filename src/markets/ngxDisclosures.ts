@@ -116,14 +116,27 @@ export async function fetchIssuers(): Promise<NgxIssuer[]> {
 	return out;
 }
 
-/** The text of a filing's PDF, or "" for a scanned document. */
-export async function fetchFilingText(url: string): Promise<string> {
-	const res = await request(url, { timeoutMs: 45_000 });
-	const bytes = new Uint8Array(await res.arrayBuffer());
-	const { extractText, getDocumentProxy } = await import("unpdf");
-	const pdf = await getDocumentProxy(bytes, { verbosity: 0 });
-	const { text } = await extractText(pdf, { mergePages: true });
-	return (text as string).replace(/\s+/g, " ").trim();
+export interface Filing {
+	/** Text of the first `maxPages` pages, whitespace collapsed; "" for a scanned document. */
+	text: string;
+	pages: number;
+	/** The PDF itself, for reading scans with an AI model. */
+	pdf: Uint8Array;
+}
+
+/** Download a filing and extract the text of its first `maxPages` pages (results run to hundreds). */
+export async function fetchFiling(url: string, maxPages = 20): Promise<Filing> {
+	const res = await request(url, { timeoutMs: 60_000 });
+	const pdf = new Uint8Array(await res.arrayBuffer());
+	const { getDocumentProxy } = await import("unpdf");
+	// pdf.js may detach the buffer it's given, so it gets a copy.
+	const doc = await getDocumentProxy(pdf.slice(), { verbosity: 0 });
+	const parts: string[] = [];
+	for (let i = 1; i <= Math.min(doc.numPages, maxPages); i++) {
+		const content = await (await doc.getPage(i)).getTextContent();
+		parts.push(content.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+	}
+	return { text: parts.join(" ").replace(/\s+/g, " ").trim(), pages: doc.numPages, pdf };
 }
 
 function kindOf(category: string): DisclosureKind {
@@ -293,17 +306,28 @@ export function parseAmount(text: string): { amount: number; currency: "NGN" | "
 	scan(/(?<![\d.])(\d+(?:\.\d+)?)\s?(?:US\s)?cents?\b/gi, (m) => ({ amount: Number(m[1]) / 100, currency: "USD" }));
 	if (found.length === 0) return null;
 	found.sort((a, b) => a.at - b.at);
+	// A total first ("₦442m amounting to ₦108,472.85 per unit"): take the per-unit amount. Otherwise the first amount
+	// wins, so a later comparison ("…in addition to the N1.25 per share interim") isn't mistaken for it.
+	const first = found[0] as Money;
 	const per = /\bper\s+(?:\d+\s*kobo\s+)?(?:ordinary\s+)?(?:share|unit)/i.exec(t);
-	const pick = per ? (found.filter((m) => m.at < per.index).at(-1) ?? found[0]) : found[0];
-	return { amount: (pick as Money).amount, currency: (pick as Money).currency };
+	const perUnit = per ? found.filter((m) => m.at < per.index).at(-1) : undefined;
+	const pick = perUnit && first.amount >= 100 * perUnit.amount ? perUnit : first;
+	return { amount: pick.amount, currency: pick.currency };
 }
 
-/** Read a dividend notice's text. Null when it doesn't state an amount (e.g. a scanned or unrelated document). */
-export function parseDividendNotice(text: string): DividendNotice | null {
+/**
+ * Read a dividend notice's text: NGX's labelled template first, then the prose AGM notices use ("…will be paid on
+ * May 5, 2026, to shareholders … at the close of business on April 24, 2026"). Null when it doesn't state an amount.
+ * `defaultKind` applies when the notice doesn't say (an AGM declares the final dividend).
+ */
+export function parseDividendNotice(
+	text: string,
+	defaultKind: DividendNotice["kind"] = "dividend",
+): DividendNotice | null {
 	const t = text.replace(/\s+/g, " ");
 	// The amount sits under "Proposed Dividend" in NGX's template; letters and fund notices state it anywhere.
 	const pattern =
-		/\b(?:(interim|final|special)\s+)?(?:dividends?|distribution)\s+(?:payment\s+)?(?:of|amounting to|in the sum of)\s+(.{0,120})/i;
+		/\b(?:(interim|final|special)\s+)?(?:dividends?|distribution)\s+(?:payment\s+)?(?:of|amounting to|(?:in|for) the sum of)\s+(.{0,120})/i;
 	const proposed = section(t, "Proposed Dividend", 400) ?? t;
 	const of = pattern.exec(proposed) ?? pattern.exec(t);
 	const amount = parseAmount(of?.[2] ?? "");
@@ -313,11 +337,11 @@ export function parseDividendNotice(text: string): DividendNotice | null {
 			? "interim"
 			: /\bfinal\b/i.test(proposed)
 				? "final"
-				: "dividend")) as DividendNotice["kind"];
+				: defaultKind)) as DividendNotice["kind"];
 
-	const qualificationDate = labelledDate(t, "Qualification Date");
-	let paymentDate = labelledDate(t, "Payment Date");
-	const closure = section(t, "Closure of Register") ?? "";
+	const qualificationDate = labelledDate(t, "Qualification Date") ?? proseDate(t, QUALIFIED_PROSE);
+	let paymentDate = labelledDate(t, "Payment Date") ?? proseDate(t, PAID_PROSE);
+	const closure = section(t, "Closure of Register") ?? CLOSED_PROSE.exec(t)?.[0] ?? "";
 	const fromTo = /closed\s+(?:from|on)\s+(.{0,60}?)(?:\s+to\s+(.{0,60}))?(?:[.(]|$)/i.exec(closure);
 	let closureEnd = fromTo?.[2] ? parseDate(fromTo[2]) : null;
 	// "from the 11th of May to the 15th of May 2026": the start borrows the end's year.
@@ -325,7 +349,7 @@ export function parseDividendNotice(text: string): DividendNotice | null {
 		? (parseDate(fromTo[1] as string) ?? (closureEnd ? parseDate(`${fromTo[1]} ${closureEnd.slice(0, 4)}`) : null))
 		: parseDate(closure);
 	if (!closureStart && fromTo && closureEnd) closureStart = dayOnly(fromTo[1] as string, closureEnd);
-	const agmDate = labelledDate(t, "AGM Date") ?? labelledDate(t, "Date of AGM");
+	const agmDate = labelledDate(t, "AGM Date") ?? labelledDate(t, "Date of AGM") ?? proseDate(t, AGM_PROSE);
 	const bonusText = section(t, "Proposed Bonus", 120) ?? "";
 	const bonus = /\b(\d+)\s+(?:new\s+)?(?:ordinary\s+)?shares?\s+for\s+(?:every\s+)?(\d+)/i.exec(bonusText);
 
@@ -346,6 +370,41 @@ export function parseDividendNotice(text: string): DividendNotice | null {
 		agmDate,
 		bonus: bonus ? `${bonus[1]} for ${bonus[2]}` : null,
 	};
+}
+
+/** Prose that AGM notices and letters use instead of NGX's labels; the date follows each match. */
+const QUALIFIED_PROSE =
+	/names?\s+(?:appear|are\s+registered|are)\b[^.]{0,80}?register\s+of\s+(?:members|shareholders)[^.]{0,40}?(?:as\s+at|as\s+of|at\s+the\s+close\s+of\s+business\s+on|on)\s+/gi;
+const PAID_PROSE = /\b(?:will|shall)\s+be\s+paid\b[^.]{0,60}?\bon\s+/gi;
+const CLOSED_PROSE = /register[^.]{0,80}?(?:will|shall)\s+be\s+closed\s+(?:from|on)\s+[^.]{0,120}/i;
+const AGM_PROSE = /annual\s+general\s+meeting\b[^.]{0,100}?(?:will|shall)\s+(?:hold|be\s+held)\s+(?:on\s+)?/gi;
+
+/** The date right after the first match of `pattern` (a global regex) that is followed by one. */
+function proseDate(text: string, pattern: RegExp): string | null {
+	for (const m of text.matchAll(pattern)) {
+		const at = (m.index ?? 0) + m[0].length;
+		const date = parseDate(text.slice(at, at + 45));
+		if (date) return date;
+	}
+	return null;
+}
+
+/**
+ * A dividend the board proposes in its results ("…proposed a final dividend of N8.75…"), which come before the
+ * AGM notice with the dates. Prior-year comparatives ("2024: final dividend of N4.00") and "has not proposed" are
+ * ignored. Null when there's none.
+ */
+export function parseProposedDividend(text: string): Pick<DividendNotice, "kind" | "amount" | "currency"> | null {
+	const t = text.replace(/\s+/g, " ");
+	const re =
+		/\b(propos\w*|recommend\w*)\s+(?:the\s+)?(?:payment\s+of\s+)?(?:an?\s+)?(?:(interim|final|special)\s+)?dividends?\s+(?:of|amounting\s+to|(?:in|for)\s+the\s+sum\s+of)\s+(.{0,80})/gi;
+	for (const m of t.matchAll(re)) {
+		const before = t.slice(Math.max(0, (m.index ?? 0) - 25), m.index);
+		if (/\b(?:not|no)\s*$/i.test(before) || /\(\s*\d{4}\s*:/.test(before)) continue;
+		const amount = parseAmount(m[3] as string);
+		if (amount) return { kind: (m[2]?.toLowerCase() ?? "final") as DividendNotice["kind"], ...amount };
+	}
+	return null;
 }
 
 /** The date after the first mention of `label` that has one ("…as at the Qualification Date…" comes earlier). */

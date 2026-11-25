@@ -21,6 +21,8 @@ export interface AIProvider {
 	readonly embeddingModel: string;
 	embed(texts: string[], kind?: EmbeddingKind): Promise<number[][]>;
 	chat(messages: ChatMessage[]): Promise<string>;
+	/** Answer `instruction` about a PDF the model reads itself, scans included (vision). */
+	readPdf(pdf: Uint8Array, instruction: string): Promise<string>;
 }
 
 export class AIError extends Error {
@@ -89,6 +91,36 @@ class OpenAIProvider implements AIProvider {
 			throw new AIError("OpenAI chat", err);
 		}
 	}
+
+	async readPdf(pdf: Uint8Array, instruction: string): Promise<string> {
+		try {
+			const res = await postJson<{ choices: { message: { content: string | null } }[] }>(
+				`${this.base}/chat/completions`,
+				{
+					model: this.chatModel,
+					messages: [
+						{
+							role: "user",
+							content: [
+								{
+									type: "file",
+									file: {
+										filename: "filing.pdf",
+										file_data: `data:application/pdf;base64,${Buffer.from(pdf).toString("base64")}`,
+									},
+								},
+								{ type: "text", text: instruction },
+							],
+						},
+					],
+				},
+				{ headers: this.headers, timeoutMs: 180_000, retries: 1 },
+			);
+			return res.choices[0]?.message.content?.trim() ?? "";
+		} catch (err) {
+			throw new AIError("OpenAI PDF", err);
+		}
+	}
 }
 
 class GeminiProvider implements AIProvider {
@@ -155,6 +187,32 @@ class GeminiProvider implements AIProvider {
 				.trim();
 		} catch (err) {
 			throw new AIError("Gemini chat", err);
+		}
+	}
+
+	async readPdf(pdf: Uint8Array, instruction: string): Promise<string> {
+		try {
+			const res = await postJson<{ candidates?: { content?: { parts?: { text?: string }[] } }[] }>(
+				`${this.base}/${this.chatModel}:generateContent`,
+				{
+					contents: [
+						{
+							role: "user",
+							parts: [
+								{ inlineData: { mimeType: "application/pdf", data: Buffer.from(pdf).toString("base64") } },
+								{ text: instruction },
+							],
+						},
+					],
+				},
+				{ headers: this.headers, timeoutMs: 180_000, retries: 1 },
+			);
+			return (res.candidates?.[0]?.content?.parts ?? [])
+				.map((p) => p.text ?? "")
+				.join("")
+				.trim();
+		} catch (err) {
+			throw new AIError("Gemini PDF", err);
 		}
 	}
 }

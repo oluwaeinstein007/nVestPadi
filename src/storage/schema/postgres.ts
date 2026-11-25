@@ -242,4 +242,9 @@ export const POSTGRES_MIGRATIONS: string[] = [
 	CREATE INDEX idx_dividends_symbol ON dividends (exchange, symbol, qualification_date);
 	CREATE INDEX idx_dividends_qualification ON dividends (qualification_date);
 	`,
+
+	// 4 — v3.6: scanned filings transcribed by an AI model (SQLite migration 6)
+	`
+	ALTER TABLE disclosures ADD COLUMN transcribed_at TEXT;
+	`,
 ];
